@@ -8,7 +8,7 @@
 
 // Bluetooth section
 
-int rssiThreshold = -40;  // Predefined threshold in dBm (closer to 0 is stronger) will be defined on web page eventually
+int rssiThreshold = -40;  // Predefined threshold in dBm (closer to 0 is stronger) can be re defined on web page
 #include <BLEDevice.h>
 #include <BLEUtils.h>
 #include <BLEScan.h>
@@ -434,6 +434,7 @@ void setup() {
   server.on("/L", handleLedOff);
   server.on("/SET", handleSet);
   server.on("/UNSET", handleUnSet);
+  server.on("/setRSSI", handleSetRSSI); 
 
   server.begin();
 
@@ -592,177 +593,6 @@ void loop() {
 
   server.handleClient();  // Processes web requests in milliseconds
 
-  //Bluetooth section
-/*
-//Orib=ginal
-  static unsigned long lastBleCycle = 0;
-  if (millis() - lastBleCycle > 10000) {
-    pBLEScan->start(SCAN_TIME, false);
-
-    Serial.println("\n--- Active BLE Tokens In Range ---");
-    unsigned long currentMillis = millis();
-    int activeCount = 0;
-
-    for (int i = 0; i < deviceCount; i++) {
-      if (currentMillis - discoveredDevices[i].lastSeen < 30000) {
-        Serial.print("MAC: ");
-        Serial.print(discoveredDevices[i].macAddress);
-        Serial.print(" | RSSI: ");
-        Serial.print(discoveredDevices[i].rssi);
-        Serial.print(" dBm | ");
-
-        unsigned long totalTimeSec = (currentMillis - discoveredDevices[i].firstSeen) / 1000;
-        if (totalTimeSec >= 60) {
-          Serial.println("First seen: > 1 min ago");
-        } else {
-          Serial.print("First seen: ");
-          Serial.print(totalTimeSec);
-          Serial.println("s ago");
-        }
-        activeCount++;
-      }
-    }
-
-    if (activeCount == 0) {
-      Serial.println("No active beacons nearby.");
-    }
-    Serial.println("----------------------------------");
-
-    pBLEScan->clearResults();
-    lastBleCycle = millis();
-  }
-
-*/
-
-/*
-
-  // --- NON-BLOCKING ASYNCHRONOUS BLUETOOTH SECTION ---
-  static unsigned long lastBleCycle = 0;
-  static bool scanTriggered = false;
-  unsigned long currentMillis = millis();
-
-  // 1. Kick off the background scan 2.5 seconds BEFORE we want to print results
-  if (currentMillis - lastBleCycle > 7500 && !scanTriggered) {
-    pBLEScan->clearResults();
-    
-    // Using the empty lambda function forces the scan to run in the background (Async)
-    // The final parameter 'false' ensures a fresh scan slice begins
-    pBLEScan->start(SCAN_TIME, [](BLEScanResults) {}, false);
-    
-    scanTriggered = true;
-  }
-
-  // 2. The main 10-second print and maintenance cycle
-  if (currentMillis - lastBleCycle > 10000) {
-    scanTriggered = false; // Reset the scan trigger flag for the next round
-
-    Serial.println("\n--- Active BLE Tokens In Range ---");
-    int activeCount = 0;
-
-    for (int i = 0; i < deviceCount; i++) {
-      // Check if device was seen within your 30-second window
-      if (currentMillis - discoveredDevices[i].lastSeen < 30000) {
-        Serial.print("MAC: ");
-        Serial.print(discoveredDevices[i].macAddress);
-        Serial.print(" [");
-        Serial.print(discoveredDevices[i].deviceType); // Prints your custom brand/name
-        Serial.print("] | RSSI: ");
-        Serial.print(discoveredDevices[i].rssi);
-        Serial.print(" dBm | ");
-
-        unsigned long totalTimeSec = (currentMillis - discoveredDevices[i].firstSeen) / 1000;
-        if (totalTimeSec >= 60) {
-          Serial.println("First seen: > 1 min ago");
-        } else {
-          Serial.print("First seen: ");
-          Serial.print(totalTimeSec);
-          Serial.println("s ago");
-        }
-        activeCount++;
-      }
-    }
-
-    if (activeCount == 0) {
-      Serial.println("No active beacons nearby.");
-    }
-    Serial.println("----------------------------------");
-
-    // Clean up internal RAM buffers so they don't bloat the radio stack
-    pBLEScan->clearResults();
-    lastBleCycle = millis();
-  }
-
-
-*/
-
-/*
-
-  // --- 1. CONTINUOUS ASYNCHRONOUS SCAN TRIGGER ---
-  // We start a continuous scan by setting duration to 0 and the last parameter to true.
-  // This only runs ONCE on startup. The radio stays active forever in the background.
-  static bool continuousScanStarted = false;
-  unsigned long currentMillis = millis();
-  if (!continuousScanStarted) {
-    pBLEScan->clearResults();
-    
-    // Duration = 0 means scan indefinitely.
-    // Empty lambda '[](BLEScanResults) {}' forces background execution.
-    // 'false' flag triggers a clean, uncorrupted receiver cycle.
-    pBLEScan->start(0, [](BLEScanResults) {}, false);
-    
-    continuousScanStarted = true;
-    Serial.println("System Alert: Continuous Background BLE Scan Initialised.");
-  }
-
-  // --- 2. THE 10-SECOND STATUS REPORT & MAINTENANCE ---
-  static unsigned long lastBleCycle = 0;
-  if (currentMillis - lastBleCycle > 10000) {
-    
-    Serial.println("\n--- Active BLE Tokens In Range ---");
-    int activeCount = 0;
-
-    for (int i = 0; i < deviceCount; i++) {
-      // Check if the device was heard from within your 30-second window
-      if (currentMillis - discoveredDevices[i].lastSeen < 30000) {
-        Serial.print("MAC: ");
-        Serial.print(discoveredDevices[i].macAddress);
-        Serial.print(" [");
-        Serial.print(discoveredDevices[i].deviceType);
-        Serial.print("] | RSSI: ");
-        Serial.print(discoveredDevices[i].rssi);
-        Serial.print(" dBm | ");
-
-        unsigned long totalTimeSec = (currentMillis - discoveredDevices[i].firstSeen) / 1000;
-        if (totalTimeSec >= 60) {
-          Serial.println("First seen: > 1 min ago");
-        } else {
-          Serial.print("First seen: ");
-          Serial.print(totalTimeSec);
-          Serial.println("s ago");
-        }
-        activeCount++;
-      }
-    }
-
-    if (activeCount == 0) {
-      Serial.println("No active beacons nearby.");
-    }
-    Serial.println("----------------------------------");
-
-    // CRITICAL UPDATE: Instead of clearing all results and turning off the radio, 
-    // we only clear the internal controller duplicate cache to prevent RAM exhaustion.
-    pBLEScan->clearResults(); 
-    
-    lastBleCycle = currentMillis;
-  }
-
-
-// that is way worse. BLE devices rarely found at all, and none in the active table
-
-// That result is a classic symptom of internal cache lock. I apologize for steering you into that trap—continuous scanning (start(0)) triggers a major flaw in the core Espressif Bluetooth stack. When left permanently on, the chip's internal controller builds a "duplicate cache". Instead of passing the beacons to your callback loop repeatedly, it assumes it has already seen them, silences them internally, and leaves your data table completely empty.To fix this and maximize reliability without choking the radio or the cache, we need to return to discrete, rapid snapshot scanning slices.The secret to maximizing hits for your security authorization rule is simple: we must dramatically lower your RSSI threshold filter.
-
-*/
-
 // --- HIGH-RELIABILITY NON-BLOCKING SNAPSHOT ENGINE ---
   static unsigned long lastBleCycle = 0;
   static bool scanTriggered = false;
@@ -778,46 +608,6 @@ void loop() {
     
     scanTriggered = true;
   }
-/*
-Prior to Removing >1 min, and adding last seen details
-  // Step B: The 6-second printing and maintenance boundary
-  if (currentMillis - lastBleCycle > 6000) {
-    scanTriggered = false; // Release trigger for the next round
-
-    Serial.println("\n--- Active BLE Tokens In Range ---");
-    int activeCount = 0;
-
-    for (int i = 0; i < deviceCount; i++) {
-      // Check if the token was detected within a safe 60-second window
-      if (currentMillis - discoveredDevices[i].lastSeen < 60000) {
-        Serial.print("MAC: ");
-        Serial.print(discoveredDevices[i].macAddress);
-        Serial.print(" [");
-        Serial.print(discoveredDevices[i].deviceType);
-        Serial.print("] | RSSI: ");
-        Serial.print(discoveredDevices[i].rssi);
-        Serial.print(" dBm | ");
-
-        unsigned long totalTimeSec = (currentMillis - discoveredDevices[i].firstSeen) / 1000;
-        if (totalTimeSec >= 60) {
-          Serial.println("First seen: > 1 min ago");
-        } else {
-          Serial.print("First seen: ");
-          Serial.print(totalTimeSec);
-          Serial.println("s ago");
-        }
-        activeCount++;
-      }
-    }
-
-    if (activeCount == 0) {
-      Serial.println("No active beacons nearby.");
-    }
-    Serial.println("----------------------------------");
-
-    lastBleCycle = currentMillis;
-  }
-*/
 
 // Step B: The 6-second printing and maintenance boundary
   if (currentMillis - lastBleCycle > 6000) {
@@ -930,43 +720,17 @@ if (request->hasArg("key")) {
     html += "<p>Alarm Panel Status: <strong> SET (enabled/on) </strong></p>";
     html += "<p><a href=\"UNSET\"><button class=\"button button2\">UnSET Alarm</button></a></p>";
   }
-/*
-  // --- INJECT THE BLUETOOTH TABLE HERE ---
-  html += "<h3>Active Bluetooth Tokens (RSSI > " + String(rssiThreshold) + " dBm)</h3>";
-  html += "<table border='1' align='center' style='margin-bottom: 20px; width: 80%; max-width: 500px;'>";
-  html += "<tr><th>MAC Address</th><th>RSSI</th><th>Duration</th></tr>";
-*/
-/*
-prior to removing the >1 min, and adding last seen
-// --- INJECT THE BLUETOOTH TABLE HERE ---
-html += "<h3>Active Bluetooth Tokens (RSSI > " + String(rssiThreshold) + " dBm)</h3>";
-html += "<table border='1' align='center' style='margin-bottom: 20px; width: 90%; max-width: 600px;'>"; // Slightly widened table for extra data
-html += "<tr><th>MAC Address</th><th>Device Info</th><th>RSSI</th><th>Duration</th></tr>"; // Added Device Info header
 
-  unsigned long currentMillis = millis();
-  int count = 0;
-
-  for (int i = 0; i < deviceCount; i++) {
-    if (currentMillis - discoveredDevices[i].lastSeen < 30000) {
-      html += "<tr><td>" + discoveredDevices[i].macAddress + "</td>";
-      html += "<td>" + String(discoveredDevices[i].rssi) + " dBm</td>";
-
-      unsigned long totalTimeSec = (currentMillis - discoveredDevices[i].firstSeen) / 1000;
-      if (totalTimeSec >= 60) {
-        html += "<td>> 1 min ago</td></tr>";
-      } else {
-        html += "<td>" + String(totalTimeSec) + "s ago</td></tr>";
-      }
-      count++;
-    }
-  }
-
-  if (count == 0) {
-    html += "<tr><td colspan='3' style='color: red;'>No authorized tokens in range.</td></tr>";
-  }
-  html += "</table>";
-
-*/
+// --- ADD RSSI THRESHOLD CONTROLLER FORM ---
+html += "<div style='text-align: center; margin: 20px auto; padding: 15px; width: 80%; max-width: 500px; border: 1px solid #ccc; border-radius: 8px;'>";
+html += "<h4>Adjust Filter Sensitivity</h4>";
+html += "<form action='/setRSSI' method='GET'>";
+html += "  <p>Current Threshold: <b>" + String(rssiThreshold) + " dBm</b></p>";
+html += "  <input type='range' name='value' min='-100' max='-10' step='1' value='" + String(rssiThreshold) + "' style='width: 80%;'>";
+html += "  <br><br>";
+html += "  <input type='submit' class='buttonsmall' value='Apply Changes'>";
+html += "</form>";
+html += "</div>";
 
 // --- TABLE HEADERS ---
   html += "<h3>Active Bluetooth Tokens (RSSI > " + String(rssiThreshold) + " dBm)</h3>";
@@ -1006,36 +770,7 @@ html += "<tr><th>MAC Address</th><th>Device Info</th><th>RSSI</th><th>Duration</
     html += "<tr><td colspan='5' style='color: red;'>No authorized tokens in range.</td></tr>";
   }
   html += "</table>";
-/*
 
-Random bit of code not needed
-
-for (int i = 0; i < deviceCount; i++) {
-    if (currentMillis - discoveredDevices[i].lastSeen < 30000) {
-      html += "<tr><td>" + discoveredDevices[i].macAddress + "</td>";
-      
-      // NEW: Inject the Manufacturer info into the second column
-      html += "<td>" + discoveredDevices[i].deviceType + "</td>";
-      
-      html += "<td>" + String(discoveredDevices[i].rssi) + " dBm</td>";
-
-      unsigned long totalTimeSec = (currentMillis - discoveredDevices[i].firstSeen) / 1000;
-      if (totalTimeSec >= 60) {
-        html += "<td>> 1 min in range</td></tr>";
-      } else {
-        html += "<td>" + String(totalTimeSec) + "s in range</td></tr>";
-      }
-      count++;
-    }
-  }
-
-  if (count == 0) {
-    // Updated colspan from 3 to 4 to stretch cleanly across the new layout configuration
-    html += "<tr><td colspan='4' style='color: red;'>No active tokens in range.</td></tr>";
-  }
-  html += "</table>";
-*/
-  
   // Display date
   html += "<p>Current Date is " + String(currentday) + " / " + String(currentmonth) + "</p>";
 
@@ -1576,30 +1311,37 @@ void handleUnSet() {
   server.sendHeader("Location", "/");
   server.send(303, "text/plain", "Redirecting...");
 }
-
-
 /*
-       // Process button actions embedded in URL paths
-        if (server.uri().indexOf("/H") >= 0 ) {
-          digitalWrite(LedPin, LOW);
-          Serial.println("Turning LED On ...");
-          ledState = "ON";
-        }
-        if (server.uri().indexOf("/L") >= 0 ) {
-          digitalWrite(LedPin, HIGH);
-          Serial.println("Turning LED Off ...");
-          ledState = "OFF";
-        }
-        if (server.uri().indexOf("/SET") >= 0 ) {
-          Sec27ASetOn();
-        }
-        if (server.uri().indexOf("/UNSET") >= 0 ) {
-          Sec27AUnsetOn();
-        }
-        if (server.uri().indexOf("/RTCReSync") >= 0 ) {
-          SetTime();
-        }
-        if (server.uri().indexOf("/Reboot") >= 0 ) {
-          ESP.restart();
-        }
+Compilation error: variable or field 'handleSetRSSI' declared void
+
+void handleSetRSSI(AsyncWebServerRequest *request) {
+  // Check if the URL string contains the 'value' parameter
+  if (request->hasArg("value")) {
+    String incomingValue = request->arg("value");
+    rssiThreshold = incomingValue.toInt(); // Safely convert to a signed integer
+    
+    Serial.print("System Setting Updated: New RSSI Threshold is ");
+    Serial.print(rssiThreshold);
+    Serial.println(" dBm");
+  }
+
+  // Redirect back to main menu dashboard instantly
+  request->redirect("/");
+}
 */
+
+void handleSetRSSI() {
+  // Check if the URL string contains the 'value' parameter
+  if (server.hasArg("value")) {
+    String incomingValue = server.arg("value");
+    rssiThreshold = incomingValue.toInt(); // Safely convert to a signed integer
+    
+    Serial.print("System Setting Updated: New RSSI Threshold is ");
+    Serial.print(rssiThreshold);
+    Serial.println(" dBm");
+  }
+
+  // Send an HTTP Redirect (303) back to the main page immediately
+  server.sendHeader("Location", "/");
+  server.send(303, "text/plain", "Redirecting...");
+}
