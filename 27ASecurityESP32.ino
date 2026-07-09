@@ -9,6 +9,9 @@
 // Bluetooth section
 
 int rssiThreshold = -40;  // Predefined threshold in dBm (closer to 0 is stronger) can be re defined on web page
+int presenceWindowSeconds = 60; // How long to remember a bluetooth device
+int scanSliceDuration = 3;      // Scanning duration slice in seconds
+
 #include <BLEDevice.h>
 #include <BLEUtils.h>
 #include <BLEScan.h>
@@ -26,7 +29,7 @@ struct TrackedBeacon {
   String deviceType; // <-- Add this to store the name/manufacturer
 };
 
-const int MAX_DEVICES = 10;
+const int MAX_DEVICES = 20;
 TrackedBeacon discoveredDevices[MAX_DEVICES];
 int deviceCount = 0;
 
@@ -56,28 +59,52 @@ if (macAddress == "CC:4F:9D:84:98:96") return "Tony's MacBook";
     return "Intel Corp";
   }
 
-   if (prefix == "C8:45:6A" ) {
-    return "Custom IoT Node "; // ike Tuya or Espressif
+  if (prefix == "6C:DE:E9" ) {
+    return "Intel Corp";
   }
 
+   if (prefix == "C8:45:6A" ) {
+    return "Custom IoT Node "; // like Tuya or Espressif
+  }
 
+if (prefix == "50:9A:63" || prefix == "6C:F3:67") {
+  return "Nokia Hardware";
+}
+if (prefix == "E0:90:2E") {
+  return "Murata IoT Module  (sony PlayStation)";
+}
   // --- NEW: Samsung Smart TVs ---
   // Covers major Samsung Electronics TV chassis and internal Bluetooth modules
   if (prefix == "00:00:F0" || prefix == "00:07:AB" || prefix == "00:16:32" || prefix == "64:1C:B0" || 
       prefix == "30:62:22" || prefix == "50:CC:F8" || prefix == "64:1B:2F" || 
-      prefix == "9C:73:B1" || prefix == "DC:87:F8" || prefix == "E0:03:6B") {
+      prefix == "9C:73:B1" || prefix == "DC:87:F8" || prefix == "E0:03:6B" || prefix == "FC:A6:EE") {
     return "Samsung Smart TV";
   }
 
-  // Apple Ecosystem (iPhones, Watches, iPads, AirTags)
-  if (prefix == "00:05:78" || prefix == "00:0A:95" || prefix == "00:10:FA" || 
-      prefix == "00:1C:B3" || prefix == "10:DD:B1" || prefix == "14:10:9F" || 
-      prefix == "D0:25:98" || prefix == "E0:C9:7A") {
+  // Apple Ecosystem (Added your MacBook/Mac prefix!)
+  if (prefix == "D8:E3:7C" || prefix == "F0:AA:CF" || prefix == "00:05:78" || prefix == "00:0A:95" || 
+      prefix == "74:52:63" || prefix == "00:10:FA" || prefix == "00:1C:B3" || prefix == "10:DD:B1" || 
+      prefix == "14:10:9F" || prefix == "D0:25:98" || prefix == "E0:C9:7A") {
     return "Apple Device";
   }
 
+    // Huawei Block Update
+  if (prefix == "57:1B:71") {
+    return "Huawei Device";
+  }
+
+  // Xiaomi Block Update
+  if (prefix == "CC:20:F8") {
+    return "Xiaomi Device";
+  }
+
+  // Tuya Smart Home Appliance Block Update
+  if (prefix == "E7:D6:CB") {
+    return "Tuya Smart IoT Node";
+  }
+
   // Google / Alphabet / Nest
-  if (prefix == "3C:5A:B4" || prefix == "D8:EB:97" || prefix == "00:1A:11") {
+  if (prefix == "3C:5A:B4" || prefix == "D8:EB:97" || prefix == "00:1A:11" || prefix == "08:6A:18" || prefix == "3C:5A:B4" || prefix == "D8:EB:97") {
     return "Google Device";
   }
 
@@ -90,11 +117,11 @@ if (macAddress == "CC:4F:9D:84:98:96") return "Tony's MacBook";
   // Espressif Systems (Other ESP32 or ESP8266 smart devices in your house)
   if (prefix == "24:4B:03" || prefix == "30:AE:A4" || prefix == "A4:CF:12" || 
       prefix == "C8:2B:96" || prefix == "EC:FA:BC") {
-    return "Espressif (ESP32)";
+    return "Espressif (ESP32/8266)";
   }
 
   // Amazon (Echo dots, Kindles, Fire sticks)
-  if (prefix == "00:BB:3A" || prefix == "50:DC:E7" || prefix == "FC:A1:3E") {
+  if (prefix == "00:BB:3A" || prefix == "50:DC:E7" || prefix == "FC:A1:3E" || prefix == "F4:DD:FA" ) {
     return "Amazon Echo/Device";
   }
 
@@ -113,14 +140,14 @@ if (macAddress == "CC:4F:9D:84:98:96") return "Tony's MacBook";
   if (privateChar == 'B' || privateChar == 'b' ||
       privateChar == 'F' || privateChar == 'f' ||
       privateChar == '9' ) {
-    return "Private Smartphone/Tablet";
+    return "Randomised Private Smartphone/Tablet";
   }
 
-  if  (privateChar == '2' || privateChar == '6' || privateChar == '5' ||
-      privateChar == 'A' || privateChar == 'a' || 
-      privateChar == 'E' || privateChar == 'e') {
-      return "Locally Administered / Private Randomized";
-      }
+ if (privateChar == '2' || privateChar == '3' || privateChar == '6' || privateChar == '5' || privateChar == '7' ||
+    privateChar == 'A' || privateChar == 'a' || 
+    privateChar == 'E' || privateChar == 'e') {
+  return "Locally Administered / Private Randomized";
+}
 
   // Final catch-all if it survives all hardcoded vendor rules and privacy checks
   return "Unknown Brand";
@@ -465,7 +492,7 @@ void setup() {
   server.on("/L", handleLedOff);
   server.on("/SET", handleSet);
   server.on("/UNSET", handleUnSet);
-  server.on("/setRSSI", handleSetRSSI); 
+  server.on("/setRadioParams", handleRadioParams); 
 
   server.begin();
 
@@ -624,6 +651,7 @@ void loop() {
 
   server.handleClient();  // Processes web requests in milliseconds
 
+/*
 // --- HIGH-RELIABILITY NON-BLOCKING SNAPSHOT ENGINE ---
   static unsigned long lastBleCycle = 0;
   static bool scanTriggered = false;
@@ -688,6 +716,77 @@ void loop() {
 
     lastBleCycle = currentMillis;
   }
+*/
+
+// --- DYNAMIC SLIDER-CONTROLLED BACKGROUND ENGINE ---
+  static unsigned long lastBleCycle = 0;
+  static bool scanTriggered = false;
+  unsigned long currentMillis = millis();
+
+  // Dynamically calculate our timing intervals based on your slider choice
+  unsigned long scanMs = (unsigned long)scanSliceDuration * 1000;
+  unsigned long totalCycleMs = scanMs * 2; // Keeps the pause window equal to scan window
+
+  // Step A: Kick off a fresh background scan based on your slider length
+  if (currentMillis - lastBleCycle > scanMs && !scanTriggered) {
+    pBLEScan->clearResults(); // Reset hardware cache
+    
+    // Scan asynchronously for the exact duration chosen on the web page slider
+    pBLEScan->start(scanSliceDuration, nullptr, false); 
+    scanTriggered = true;
+  }
+
+  // Step B: Printing and table lifecycle boundary
+  if (currentMillis - lastBleCycle > totalCycleMs) {
+    scanTriggered = false; // Release trigger for the next round
+    
+    // ... Your standard table printing / loop reporting lines go here exactly as before ...
+
+        Serial.println("\n--- Active BLE Tokens In Range ---");
+    int activeCount = 0;
+
+    for (int i = 0; i < deviceCount; i++) {
+      // Check if the token was detected within a safe 60-second window
+      if (currentMillis - discoveredDevices[i].lastSeen < 60000) {
+        Serial.print("MAC: ");
+        Serial.print(discoveredDevices[i].macAddress);
+        Serial.print(" [");
+        Serial.print(discoveredDevices[i].deviceType);
+        Serial.print("] | RSSI: ");
+        Serial.print(discoveredDevices[i].rssi);
+        Serial.print(" dBm | ");
+
+        // Calculate Last Seen timing
+        unsigned long lastSeenSec = (currentMillis - discoveredDevices[i].lastSeen) / 1000;
+        Serial.print("Last seen: ");
+        Serial.print(lastSeenSec);
+        Serial.print("s ago | ");
+
+        // NEW: Uncapped Exact Duration tracking (Minutes and Seconds breakdown)
+        unsigned long totalTimeSec = (currentMillis - discoveredDevices[i].firstSeen) / 1000;
+        unsigned long mins = totalTimeSec / 60;
+        unsigned long secs = totalTimeSec % 60;
+        
+        Serial.print("Duration: ");
+        if (mins > 0) {
+          Serial.print(mins);
+          Serial.print("m ");
+        }
+        Serial.print(secs);
+        Serial.println("s in range");
+
+        activeCount++;
+      }
+    }
+
+    if (activeCount == 0) {
+      Serial.println("No active beacons nearby.");
+    }
+    Serial.println("----------------------------------");
+
+    lastBleCycle = currentMillis;
+  }
+
 
 }  // end Void Loop
 
@@ -751,7 +850,7 @@ if (request->hasArg("key")) {
     html += "<p>Alarm Panel Status: <strong> SET (enabled/on) </strong></p>";
     html += "<p><a href=\"UNSET\"><button class=\"button button2\">UnSET Alarm</button></a></p>";
   }
-
+/* old (big form)
 // --- ADD RSSI THRESHOLD CONTROLLER FORM ---
 html += "<div style='text-align: center; margin: 20px auto; padding: 15px; width: 80%; max-width: 500px; border: 1px solid #ccc; border-radius: 8px;'>";
 html += "<h4>Adjust Filter Sensitivity</h4>";
@@ -762,6 +861,35 @@ html += "  <br><br>";
 html += "  <input type='submit' class='buttonsmall' value='Apply Changes'>";
 html += "</form>";
 html += "</div>";
+*/
+
+// --- STREAMLINED FILTER CONTROLLER BOX ---
+  html += "<div style='text-align: center; margin: 10px auto; padding: 10px; width: 90%; max-width: 380px; border: 1px solid #bbb; border-radius: 6px; font-size: 0.9em; background-color: #f9f9f9;'>";
+  html += "  <h5 style='margin: 0 0 8px 0;'>Radio & Filter Tweaks</h5>";
+  html += "  <form action='/setRadioParams' method='GET'>";
+  
+  // Slider 1: RSSI Sensitivity
+  html += "    <div style='margin-bottom: 6px;'>";
+  html += "      <label style='display:block; margin-bottom:2px;'>Gate: <b>" + String(rssiThreshold) + " dBm</b></label>";
+  html += "      <input type='range' name='rssi' min='-100' max='-10' step='1' value='" + String(rssiThreshold) + "' style='width: 85; height: 4px;'>";
+  html += "    </div>";
+  
+  // Slider 2: Detection Window Timeout
+  html += "    <div style='margin-bottom: 6px;'>";
+  html += "      <label style='display:block; margin-bottom:2px;'>Keep-Alive Window: <b>" + String(presenceWindowSeconds) + "s</b></label>";
+  html += "      <input type='range' name='window' min='10' max='300' step='5' value='" + String(presenceWindowSeconds) + "' style='width: 85%; height: 4px;'>";
+  html += "    </div>";
+  
+  // Slider 3: NEW Scan Slice Duration
+  html += "    <div style='margin-bottom: 10px;'>";
+  html += "      <label style='display:block; margin-bottom:2px;'>Scan Slice: <b>" + String(scanSliceDuration) + "s</b></label>";
+  html += "      <input type='range' name='scantime' min='1' max='10' step='1' value='" + String(scanSliceDuration) + "' style='width: 85%; height: 4px;'>";
+  html += "    </div>";
+  
+  html += "    <input type='submit' class='buttonsmall' style='padding: 4px 10px; font-size: 0.85em;' value='Apply Changes'>";
+  html += "  </form>";
+  html += "</div>";
+
 
 // --- TABLE HEADERS ---
   html += "<h3>Active Bluetooth Tokens (RSSI > " + String(rssiThreshold) + " dBm)</h3>";
@@ -1360,7 +1488,7 @@ void handleSetRSSI(AsyncWebServerRequest *request) {
   request->redirect("/");
 }
 */
-
+/* old handler for only rssi
 void handleSetRSSI() {
   // Check if the URL string contains the 'value' parameter
   if (server.hasArg("value")) {
@@ -1373,6 +1501,25 @@ void handleSetRSSI() {
   }
 
   // Send an HTTP Redirect (303) back to the main page immediately
+  server.sendHeader("Location", "/");
+  server.send(303, "text/plain", "Redirecting...");
+}
+*/
+
+void handleRadioParams() {
+  if (server.hasArg("rssi"))      rssiThreshold = server.arg("rssi").toInt();
+  if (server.hasArg("window"))    presenceWindowSeconds = server.arg("window").toInt();
+  if (server.hasArg("scantime"))  scanSliceDuration = server.arg("scantime").toInt(); // Parse new slider
+
+  Serial.print("Parameters Updated -> Gate: ");
+  Serial.print(rssiThreshold);
+  Serial.print("dBm | Window: ");
+  Serial.print(presenceWindowSeconds);
+  Serial.print("s | Scan Slice: ");
+  Serial.print(scanSliceDuration);
+  Serial.println("s");
+
+  // Send an HTTP Redirect (303) back to dashboard root
   server.sendHeader("Location", "/");
   server.send(303, "text/plain", "Redirecting...");
 }
