@@ -145,6 +145,8 @@ String manufacturer = IdentifyManufacturer(currentMac);
     }
   }
 };
+
+
 // prototypes
 boolean connectWifi();  // router handed out 192.168.1.169 for this initially
 
@@ -591,8 +593,8 @@ void loop() {
   server.handleClient();  // Processes web requests in milliseconds
 
   //Bluetooth section
-
-
+/*
+//Orib=ginal
   static unsigned long lastBleCycle = 0;
   if (millis() - lastBleCycle > 10000) {
     pBLEScan->start(SCAN_TIME, false);
@@ -630,7 +632,241 @@ void loop() {
     lastBleCycle = millis();
   }
 
+*/
 
+/*
+
+  // --- NON-BLOCKING ASYNCHRONOUS BLUETOOTH SECTION ---
+  static unsigned long lastBleCycle = 0;
+  static bool scanTriggered = false;
+  unsigned long currentMillis = millis();
+
+  // 1. Kick off the background scan 2.5 seconds BEFORE we want to print results
+  if (currentMillis - lastBleCycle > 7500 && !scanTriggered) {
+    pBLEScan->clearResults();
+    
+    // Using the empty lambda function forces the scan to run in the background (Async)
+    // The final parameter 'false' ensures a fresh scan slice begins
+    pBLEScan->start(SCAN_TIME, [](BLEScanResults) {}, false);
+    
+    scanTriggered = true;
+  }
+
+  // 2. The main 10-second print and maintenance cycle
+  if (currentMillis - lastBleCycle > 10000) {
+    scanTriggered = false; // Reset the scan trigger flag for the next round
+
+    Serial.println("\n--- Active BLE Tokens In Range ---");
+    int activeCount = 0;
+
+    for (int i = 0; i < deviceCount; i++) {
+      // Check if device was seen within your 30-second window
+      if (currentMillis - discoveredDevices[i].lastSeen < 30000) {
+        Serial.print("MAC: ");
+        Serial.print(discoveredDevices[i].macAddress);
+        Serial.print(" [");
+        Serial.print(discoveredDevices[i].deviceType); // Prints your custom brand/name
+        Serial.print("] | RSSI: ");
+        Serial.print(discoveredDevices[i].rssi);
+        Serial.print(" dBm | ");
+
+        unsigned long totalTimeSec = (currentMillis - discoveredDevices[i].firstSeen) / 1000;
+        if (totalTimeSec >= 60) {
+          Serial.println("First seen: > 1 min ago");
+        } else {
+          Serial.print("First seen: ");
+          Serial.print(totalTimeSec);
+          Serial.println("s ago");
+        }
+        activeCount++;
+      }
+    }
+
+    if (activeCount == 0) {
+      Serial.println("No active beacons nearby.");
+    }
+    Serial.println("----------------------------------");
+
+    // Clean up internal RAM buffers so they don't bloat the radio stack
+    pBLEScan->clearResults();
+    lastBleCycle = millis();
+  }
+
+
+*/
+
+/*
+
+  // --- 1. CONTINUOUS ASYNCHRONOUS SCAN TRIGGER ---
+  // We start a continuous scan by setting duration to 0 and the last parameter to true.
+  // This only runs ONCE on startup. The radio stays active forever in the background.
+  static bool continuousScanStarted = false;
+  unsigned long currentMillis = millis();
+  if (!continuousScanStarted) {
+    pBLEScan->clearResults();
+    
+    // Duration = 0 means scan indefinitely.
+    // Empty lambda '[](BLEScanResults) {}' forces background execution.
+    // 'false' flag triggers a clean, uncorrupted receiver cycle.
+    pBLEScan->start(0, [](BLEScanResults) {}, false);
+    
+    continuousScanStarted = true;
+    Serial.println("System Alert: Continuous Background BLE Scan Initialised.");
+  }
+
+  // --- 2. THE 10-SECOND STATUS REPORT & MAINTENANCE ---
+  static unsigned long lastBleCycle = 0;
+  if (currentMillis - lastBleCycle > 10000) {
+    
+    Serial.println("\n--- Active BLE Tokens In Range ---");
+    int activeCount = 0;
+
+    for (int i = 0; i < deviceCount; i++) {
+      // Check if the device was heard from within your 30-second window
+      if (currentMillis - discoveredDevices[i].lastSeen < 30000) {
+        Serial.print("MAC: ");
+        Serial.print(discoveredDevices[i].macAddress);
+        Serial.print(" [");
+        Serial.print(discoveredDevices[i].deviceType);
+        Serial.print("] | RSSI: ");
+        Serial.print(discoveredDevices[i].rssi);
+        Serial.print(" dBm | ");
+
+        unsigned long totalTimeSec = (currentMillis - discoveredDevices[i].firstSeen) / 1000;
+        if (totalTimeSec >= 60) {
+          Serial.println("First seen: > 1 min ago");
+        } else {
+          Serial.print("First seen: ");
+          Serial.print(totalTimeSec);
+          Serial.println("s ago");
+        }
+        activeCount++;
+      }
+    }
+
+    if (activeCount == 0) {
+      Serial.println("No active beacons nearby.");
+    }
+    Serial.println("----------------------------------");
+
+    // CRITICAL UPDATE: Instead of clearing all results and turning off the radio, 
+    // we only clear the internal controller duplicate cache to prevent RAM exhaustion.
+    pBLEScan->clearResults(); 
+    
+    lastBleCycle = currentMillis;
+  }
+
+
+// that is way worse. BLE devices rarely found at all, and none in the active table
+
+// That result is a classic symptom of internal cache lock. I apologize for steering you into that trap—continuous scanning (start(0)) triggers a major flaw in the core Espressif Bluetooth stack. When left permanently on, the chip's internal controller builds a "duplicate cache". Instead of passing the beacons to your callback loop repeatedly, it assumes it has already seen them, silences them internally, and leaves your data table completely empty.To fix this and maximize reliability without choking the radio or the cache, we need to return to discrete, rapid snapshot scanning slices.The secret to maximizing hits for your security authorization rule is simple: we must dramatically lower your RSSI threshold filter.
+
+*/
+
+// --- HIGH-RELIABILITY NON-BLOCKING SNAPSHOT ENGINE ---
+  static unsigned long lastBleCycle = 0;
+  static bool scanTriggered = false;
+  unsigned long currentMillis = millis();
+
+  // Step A: Kick off a fresh 3-second background scan at the 3-second mark
+  if (currentMillis - lastBleCycle > 3000 && !scanTriggered) {
+    // Hard reset the chip's internal hardware duplicate filters
+    pBLEScan->clearResults(); 
+    
+    // Scan for 3 seconds, use no completion callback, set continue to false
+    pBLEScan->start(3, nullptr, false); 
+    
+    scanTriggered = true;
+  }
+/*
+Prior to Removing >1 min, and adding last seen details
+  // Step B: The 6-second printing and maintenance boundary
+  if (currentMillis - lastBleCycle > 6000) {
+    scanTriggered = false; // Release trigger for the next round
+
+    Serial.println("\n--- Active BLE Tokens In Range ---");
+    int activeCount = 0;
+
+    for (int i = 0; i < deviceCount; i++) {
+      // Check if the token was detected within a safe 60-second window
+      if (currentMillis - discoveredDevices[i].lastSeen < 60000) {
+        Serial.print("MAC: ");
+        Serial.print(discoveredDevices[i].macAddress);
+        Serial.print(" [");
+        Serial.print(discoveredDevices[i].deviceType);
+        Serial.print("] | RSSI: ");
+        Serial.print(discoveredDevices[i].rssi);
+        Serial.print(" dBm | ");
+
+        unsigned long totalTimeSec = (currentMillis - discoveredDevices[i].firstSeen) / 1000;
+        if (totalTimeSec >= 60) {
+          Serial.println("First seen: > 1 min ago");
+        } else {
+          Serial.print("First seen: ");
+          Serial.print(totalTimeSec);
+          Serial.println("s ago");
+        }
+        activeCount++;
+      }
+    }
+
+    if (activeCount == 0) {
+      Serial.println("No active beacons nearby.");
+    }
+    Serial.println("----------------------------------");
+
+    lastBleCycle = currentMillis;
+  }
+*/
+
+// Step B: The 6-second printing and maintenance boundary
+  if (currentMillis - lastBleCycle > 6000) {
+    scanTriggered = false; // Release trigger for the next round
+
+    Serial.println("\n--- Active BLE Tokens In Range ---");
+    int activeCount = 0;
+
+    for (int i = 0; i < deviceCount; i++) {
+      // Check if the token was detected within a safe 60-second window
+      if (currentMillis - discoveredDevices[i].lastSeen < 60000) {
+        Serial.print("MAC: ");
+        Serial.print(discoveredDevices[i].macAddress);
+        Serial.print(" [");
+        Serial.print(discoveredDevices[i].deviceType);
+        Serial.print("] | RSSI: ");
+        Serial.print(discoveredDevices[i].rssi);
+        Serial.print(" dBm | ");
+
+        // Calculate Last Seen timing
+        unsigned long lastSeenSec = (currentMillis - discoveredDevices[i].lastSeen) / 1000;
+        Serial.print("Last seen: ");
+        Serial.print(lastSeenSec);
+        Serial.print("s ago | ");
+
+        // NEW: Uncapped Exact Duration tracking (Minutes and Seconds breakdown)
+        unsigned long totalTimeSec = (currentMillis - discoveredDevices[i].firstSeen) / 1000;
+        unsigned long mins = totalTimeSec / 60;
+        unsigned long secs = totalTimeSec % 60;
+        
+        Serial.print("Duration: ");
+        if (mins > 0) {
+          Serial.print(mins);
+          Serial.print("m ");
+        }
+        Serial.print(secs);
+        Serial.println("s in range");
+
+        activeCount++;
+      }
+    }
+
+    if (activeCount == 0) {
+      Serial.println("No active beacons nearby.");
+    }
+    Serial.println("----------------------------------");
+
+    lastBleCycle = currentMillis;
+  }
 
 }  // end Void Loop
 
@@ -700,6 +936,8 @@ if (request->hasArg("key")) {
   html += "<table border='1' align='center' style='margin-bottom: 20px; width: 80%; max-width: 500px;'>";
   html += "<tr><th>MAC Address</th><th>RSSI</th><th>Duration</th></tr>";
 */
+/*
+prior to removing the >1 min, and adding last seen
 // --- INJECT THE BLUETOOTH TABLE HERE ---
 html += "<h3>Active Bluetooth Tokens (RSSI > " + String(rssiThreshold) + " dBm)</h3>";
 html += "<table border='1' align='center' style='margin-bottom: 20px; width: 90%; max-width: 600px;'>"; // Slightly widened table for extra data
@@ -707,7 +945,7 @@ html += "<tr><th>MAC Address</th><th>Device Info</th><th>RSSI</th><th>Duration</
 
   unsigned long currentMillis = millis();
   int count = 0;
-/*
+
   for (int i = 0; i < deviceCount; i++) {
     if (currentMillis - discoveredDevices[i].lastSeen < 30000) {
       html += "<tr><td>" + discoveredDevices[i].macAddress + "</td>";
@@ -730,6 +968,48 @@ html += "<tr><th>MAC Address</th><th>Device Info</th><th>RSSI</th><th>Duration</
 
 */
 
+// --- TABLE HEADERS ---
+  html += "<h3>Active Bluetooth Tokens (RSSI > " + String(rssiThreshold) + " dBm)</h3>";
+  html += "<table border='1' align='center' style='margin-bottom: 20px; width: 95%; max-width: 650px;'>";
+  html += "<tr><th>MAC Address</th><th>Device Info</th><th>RSSI</th><th>Last Seen</th><th>Total Duration</th></tr>";
+
+ unsigned long currentMillis = millis();
+  int count = 0;
+
+  // --- ROW INJECTION LOOP ---
+  for (int i = 0; i < deviceCount; i++) {
+    if (currentMillis - discoveredDevices[i].lastSeen < 60000) {
+      html += "<tr><td>" + discoveredDevices[i].macAddress + "</td>";
+      html += "<td>" + discoveredDevices[i].deviceType + "</td>";
+      html += "<td>" + String(discoveredDevices[i].rssi) + " dBm</td>";
+
+      // Inject Last Seen column data
+      unsigned long lastSeenSec = (currentMillis - discoveredDevices[i].lastSeen) / 1000;
+      html += "<td>" + String(lastSeenSec) + "s ago</td>";
+
+      // NEW: Uncapped Exact Duration tracking for the web page
+      unsigned long totalTimeSec = (currentMillis - discoveredDevices[i].firstSeen) / 1000;
+      unsigned long mins = totalTimeSec / 60;
+      unsigned long secs = totalTimeSec % 60;
+      
+      html += "<td>";
+      if (mins > 0) {
+        html += String(mins) + "m ";
+      }
+      html += String(secs) + "s in range</td></tr>";
+
+      count++;
+    }
+  }
+
+  if (count == 0) {
+    html += "<tr><td colspan='5' style='color: red;'>No authorized tokens in range.</td></tr>";
+  }
+  html += "</table>";
+/*
+
+Random bit of code not needed
+
 for (int i = 0; i < deviceCount; i++) {
     if (currentMillis - discoveredDevices[i].lastSeen < 30000) {
       html += "<tr><td>" + discoveredDevices[i].macAddress + "</td>";
@@ -751,11 +1031,11 @@ for (int i = 0; i < deviceCount; i++) {
 
   if (count == 0) {
     // Updated colspan from 3 to 4 to stretch cleanly across the new layout configuration
-    html += "<tr><td colspan='4' style='color: red;'>No authorized tokens in range.</td></tr>";
+    html += "<tr><td colspan='4' style='color: red;'>No active tokens in range.</td></tr>";
   }
   html += "</table>";
-
-  // display proxy log
+*/
+  
   // Display date
   html += "<p>Current Date is " + String(currentday) + " / " + String(currentmonth) + "</p>";
 
