@@ -1,0 +1,1217 @@
+#include <WiFi.h>
+#include <WebServer.h>
+#include <WiFiUdp.h>
+#include <functional>
+#include "switch.h"
+#include "UpnpBroadcastResponder.h"
+#include "CallbackFunction.h"
+
+// Bluetooth section
+
+int rssiThreshold = -40;  // Predefined threshold in dBm (closer to 0 is stronger)
+#include <BLEDevice.h>
+#include <BLEUtils.h>
+#include <BLEScan.h>
+#include <BLEAdvertisedDevice.h>
+
+#define SCAN_TIME 2
+
+BLEScan* pBLEScan;
+
+struct TrackedBeacon {
+  String macAddress;
+  int rssi;
+  unsigned long lastSeen;
+  unsigned long firstSeen;
+};
+
+const int MAX_DEVICES = 10;
+TrackedBeacon discoveredDevices[MAX_DEVICES];
+int deviceCount = 0;
+
+class MyAdvertisedDeviceCallbacks : public BLEAdvertisedDeviceCallbacks {
+  void onResult(BLEAdvertisedDevice advertisedDevice) {
+    int currentRssi = advertisedDevice.getRSSI();
+
+    String currentMac = advertisedDevice.getAddress().toString().c_str();
+
+    // --- ADD THESE LINES TO PRINT TO SERIAL MONITOR ---
+    Serial.print("BLE Device Found: ");
+    Serial.print(currentMac);
+    Serial.print(" | RSSI: ");
+    Serial.println(currentRssi);
+    // --------------------------------------------------
+
+    // Ignore the device completely if the signal is too weak
+    if (currentRssi < rssiThreshold) {
+      return;
+    }
+
+
+    unsigned long now = millis();
+
+
+
+    bool found = false;
+    for (int i = 0; i < deviceCount; i++) {
+      if (discoveredDevices[i].macAddress == currentMac) {
+        // If the device has been missing for over 30 seconds, reset arrival timer
+        if (now - discoveredDevices[i].lastSeen > 30000) {
+          discoveredDevices[i].firstSeen = now;
+        }
+
+        discoveredDevices[i].rssi = currentRssi;
+        discoveredDevices[i].lastSeen = now;
+        found = true;
+        break;
+      }
+    }
+
+    if (!found && deviceCount < MAX_DEVICES) {
+      discoveredDevices[deviceCount].macAddress = currentMac;
+      discoveredDevices[deviceCount].rssi = currentRssi;
+      discoveredDevices[deviceCount].lastSeen = now;
+      discoveredDevices[deviceCount].firstSeen = now;
+      deviceCount++;
+    }
+  }
+};
+// prototypes
+boolean connectWifi();  // router handed out 192.168.1.169 for this initially
+
+//on/off callbacks
+bool Sec27ASetOn();
+bool Sec27ASetOff();
+bool Sec27AUnsetOn();
+bool Sec27AUnsetOff();
+bool Sec27APanicOn();
+bool Sec27APanicOff();
+bool AlarmSetLockout = LOW;  // HIGH is lockout state
+
+// Change this before you flash
+//const char* ssid = "SmartStuff";
+//const char* password = "Password123456";
+
+const char* ssid = "Inspire Net 2.4G";
+const char* password = "cexekocura";
+
+boolean wifiConnected = false;
+
+UpnpBroadcastResponder upnpBroadcastResponder;
+
+Switch* Sec27ASet = NULL;
+Switch* Sec27AUnset = NULL;
+Switch* Sec27APanic = NULL;
+
+bool isSec27ASetOn = false;
+bool isSec27AUnsetOn = false;
+bool isSec27APanicOn = false;
+bool Sec27ASetState = LOW;
+bool PrevSec27ASetState = LOW;
+bool Sec27ASoundingState = LOW;
+bool PrevSec27ASoundingState = LOW;
+
+//const int SetUnsetInputPin = 0;  // SetUnsetInputPin pin on ESP-01
+const int SetUnsetInputPin = 9;  // SetUnsetInputPin pin on ESP32 -C3 - The BOOT button
+//const int LedPin = 2;             // GPIO2 pin. used as LED Driver on ESP-01 / 8266
+const int LedPin = 8;                 //  used as LED Driver on an ESP32-C3
+const int AlarmSoundingInputPin = 3;  //
+/*
+IO for an ESP-01 setup on a dual relay board
+GPIO0 - Alarm Panel Set/Unset input
+GPIO1 (TXD) = unused exept for serial debug
+GPIO2 -LED Driver 
+GPIO3 (RXD) - potentially the AlarmSounding input . Not used by current code except logging alarm activity towards the local web page and watchdog proxy
+
+Onboard relay1 = AlarmSet/Unset control
+Onboard relay2 = Panic Input or outside siren
+*/
+
+byte VBNumber = 40;          // 40 is the watchdog post value for the 27A Security Interface
+String VBNumberString = "";  // also need a string as leading zero needed for later string matching accuracy
+
+const char* WatchDogHost = "192.168.1.60";  // ip address of the watchdog esp8266
+
+long WatchDogCounterLoopThreshold = 200;  // value of 30 is about 5secs. 200 is about 20 sec
+long WatchDogLoopCounter = 0;
+
+byte rel1ON[] = { 0xA0, 0x01, 0x01, 0xA2 };   //Hex command to send to serial for open relay 1 - set/unset alarm
+byte rel1OFF[] = { 0xA0, 0x01, 0x00, 0xA1 };  //Hex command to send to serial for close relay 1
+byte rel2ON[] = { 0xA0, 0x02, 0x01, 0xA3 };   //Hex command to send to serial for open relay 2 - Panic zone or outside siren
+byte rel2OFF[] = { 0xA0, 0x02, 0x00, 0xA2 };  //Hex command to send to serial for close relay 2
+
+//WiFiServer server(80);  // start bWebServer
+WebServer server(80);
+
+String ledState = "OFF";
+//const int ledPin = 2;  // Built-in LED pin on 8266
+
+int ProxyLogArrayIndex = 0;
+
+byte currentseconds = 0;
+byte currentminutes = 55;
+byte currenthours = 12;
+long currentday = 0;
+long currentmonth = 0;
+String ProxyLogArray[64];  // 20 events each containing Date [0], Time[1], Proxt [2]. last 3 entries (60,61,62) are headers
+String LastRebootDate;
+String LastRebootTime;
+float UpTimeDays = 0;
+byte ProxyRequestID = 0;
+String ProxyRequestText;
+bool SetTimeWasSuccesfull;
+int DSTOffset = 1;
+
+int StackedIndex = 0;
+byte WebPageMode = 2;  // 1 = Setup, 2 = Runtime
+
+unsigned long currentTime = millis();
+
+unsigned long previousTime = 0;
+unsigned long previousMillis = 0;
+
+
+int AlarmSetLockoutCounter;
+int AlarmSetLockoutCounterThreshold = 30;
+
+// Set your Static IP address
+//IPAddress local_IP(192, 168, 1, 169);  // fixed IP address for the 27A Security Interface (this code) at 27A
+//IPAddress gateway(192, 168, 1, 1);
+IPAddress local_IP(192, 168, 20, 20);  // fixed IP address for the 27A Security Interface (this code) at Dougs place
+IPAddress gateway(192, 168, 20, 1);
+IPAddress subnet(255, 255, 255, 0);
+IPAddress primaryDNS(8, 8, 8, 8);    // Google DNS (crucial for NTP time sync)
+IPAddress secondaryDNS(8, 8, 4, 4);  // Optional backup DNS
+
+void setup() {
+
+  pinMode(LedPin, OUTPUT);
+
+  Serial.begin(115200);
+  delay(1000);
+
+  Serial.println("Booting 27a Security Interface...");
+  delay(1000);
+
+  //flash fast a few times to indicate CPU is booting
+  digitalWrite(LedPin, LOW);
+  delay(100);
+  digitalWrite(LedPin, HIGH);
+  delay(100);
+  digitalWrite(LedPin, LOW);
+  delay(100);
+  digitalWrite(LedPin, HIGH);
+  delay(100);
+  digitalWrite(LedPin, LOW);
+  delay(100);
+  digitalWrite(LedPin, HIGH);
+  delay(100);
+  digitalWrite(LedPin, LOW);
+  delay(100);
+  digitalWrite(LedPin, HIGH);
+  delay(100);
+  digitalWrite(LedPin, LOW);
+  delay(100);
+  digitalWrite(LedPin, HIGH);
+  delay(100);
+  digitalWrite(LedPin, LOW);
+  delay(100);
+  digitalWrite(LedPin, HIGH);
+
+  Serial.println("Booting 27A Security Interface.    Delaying a bit...");
+  delay(2000);
+
+  //WiFi.setSleepMode(WIFI_NONE_SLEEP); 8266 style
+  WiFi.setSleep(false);
+
+  // Initialise wifi connection
+  wifiConnected = connectWifi();
+
+  if (wifiConnected) {
+
+    //flash slow a few times to indicate wifi connected OK
+    digitalWrite(LedPin, LOW);
+    delay(1000);
+    digitalWrite(LedPin, HIGH);
+    delay(1000);
+    digitalWrite(LedPin, LOW);
+    delay(1000);
+    digitalWrite(LedPin, HIGH);
+    delay(1000);
+    digitalWrite(LedPin, LOW);
+    delay(1000);
+    digitalWrite(LedPin, HIGH);
+
+    upnpBroadcastResponder.beginUdpMulticast();
+
+    // Define your switches here. Max 10
+    // Format: Alexa invocation name, local port no, on callback, off callback
+    Sec27ASet = new Switch("Enable 27A Perimeter Monitor", 67, Sec27ASetOn, Sec27ASetOff);
+    Sec27AUnset = new Switch("Disable 27A Perimeter Monitor", 68, Sec27AUnsetOn, Sec27AUnsetOff);
+    Sec27APanic = new Switch("27A Panic", 69, Sec27APanicOn, Sec27APanicOff);
+
+    Serial.println("Adding switches upnp broadcast responder");
+    upnpBroadcastResponder.addDevice(*Sec27ASet);
+    upnpBroadcastResponder.addDevice(*Sec27AUnset);
+    upnpBroadcastResponder.addDevice(*Sec27APanic);
+  }
+  digitalWrite(LedPin, HIGH);  // turn off LED
+
+  Serial.println("Making AlarmSoundingInputPin into an INPUT_PULLUP");
+  //pinMode(AlarmSoundingInputPin, FUNCTION_3); old 8266 function, not needed in ESP32
+  pinMode(AlarmSoundingInputPin, INPUT_PULLUP);
+
+  Serial.println("Making SetUnsetInputPin into an INPUT_PULLUP");  // used to detect 27A Security  Set/Unset state
+
+  //pinMode(SetUnsetInputPin, FUNCTION_3);
+  pinMode(SetUnsetInputPin, INPUT);
+
+  // Start the server and print local IP address
+  server.begin();
+  Serial.println("");
+  Serial.println("Wi-Fi connected.");
+  Serial.print("IP address to visit: http://");
+  Serial.println(WiFi.localIP());
+
+  // populate event log headers
+  ProxyLogArray[60] = "Date";
+  ProxyLogArray[61] = "Time";
+  ProxyLogArray[62] = "Event Info";
+
+  ProxyLogArray[57] = "1st Entry date";
+  ProxyLogArray[58] = "1st Entry time";
+  ProxyLogArray[59] = "1st Entry Event";
+
+  ProxyLogArray[54] = "2 Entry date";
+  ProxyLogArray[55] = "2 Entry time";
+  ProxyLogArray[56] = "2 Entry Event";
+
+  ProxyLogArray[51] = "3 Entry date";
+  ProxyLogArray[52] = "3 Entry time";
+  ProxyLogArray[53] = "3 Entry Event";
+
+  ProxyLogArray[30] = "1/2way date";
+  ProxyLogArray[31] = " 1/2way Time";
+  ProxyLogArray[32] = "1/2way Event Info";
+
+
+
+  ProxyLogArray[3] = "2nd2Last Entry date";
+  ProxyLogArray[4] = "2nd2Last Entry time";
+  ProxyLogArray[5] = "2nd2Last Entry Event";
+
+  ProxyLogArray[0] = "oldest Entry date";
+  ProxyLogArray[1] = "oldest Entry time";
+  ProxyLogArray[2] = "oldest Entry Event";
+
+  SetTime();  // sync the clock..
+  Serial.println(" Delaying 1 sec before trying clock sync again...");
+  delay(1000);
+  SetTime();  // sync the clock..
+  Serial.println(" completed 2nd clock sync ..");
+  // Load root certificate in DER format into WiFiClientSecure object
+  bool res = 0;  //client.setCACert_P(caCert, caCertLen);
+                 //if (!res) {
+  Serial.println("Failed to load root CA certificate!");
+  // while (true) {
+  //  yield();
+  // }
+  //  Serial.println("root CA certificate loaded");
+  //}
+
+  // Populate " - " in all Proxy log slots
+
+  Serial.println("populating array with - ");
+
+  for (ProxyLogArrayIndex = 0; ProxyLogArrayIndex < 57; ProxyLogArrayIndex = ProxyLogArrayIndex + 1) {
+
+    ProxyLogArray[ProxyLogArrayIndex] = " - ";
+  }
+
+  // Save reboot date/time
+  LastRebootDate = (String(currentday) + " / " + String(currentmonth));
+  LastRebootTime = (String(currenthours) + ":" + String(currentminutes) + ":" + String(currentseconds));
+
+  // Insert reboot time as first event in event table
+  Serial.println("populating array with boot time");
+  ProxyLogArray[57] = (String(currentday) + " / " + String(currentmonth));
+  ProxyLogArray[58] = (String(currenthours) + ":" + String(currentminutes) + ":" + String(currentseconds));
+  ProxyLogArray[59] = "Restarted";
+
+  // Rotate WDFailLog towards index 0 each log entry is 3 entries
+
+  for (ProxyLogArrayIndex = 0; ProxyLogArrayIndex < 30; ProxyLogArrayIndex = ProxyLogArrayIndex + 1) {
+
+    ProxyLogArray[ProxyLogArrayIndex] = ProxyLogArray[(ProxyLogArrayIndex + 3)];
+  }
+
+  // BLUETOOTH SECTION
+
+
+  BLEDevice::init("SecurityGateway");
+  pBLEScan = BLEDevice::getScan();
+  pBLEScan->setAdvertisedDeviceCallbacks(new MyAdvertisedDeviceCallbacks());
+  pBLEScan->setActiveScan(true);
+  pBLEScan->setInterval(100);
+  pBLEScan->setWindow(99);
+
+  server.on("/", handleRoot);  // Tells the ESP32 to run handleRoot when someone visits
+  server.on("/RTCReSync", handleRTCReSync);
+  server.on("/Reboot", handleReboot);
+  server.on("/ProxyLog2", handleProxyLog2);
+  server.on("/H", handleLedOn);
+  server.on("/L", handleLedOff);
+  server.on("/SET", handleSet);
+  server.on("/UNSET", handleUnSet);
+
+  server.begin();
+
+  Serial.println("end of void setup... Delaying 1 sec...");
+  delay(1000);
+
+}  // end of void setup
+
+
+void loop() {
+
+  if (WiFi.status() != WL_CONNECTED) {
+    delay(1);
+    connectWifi();
+    return;
+  }
+
+  Sec27ASetState = digitalRead(SetUnsetInputPin);  //
+  delay(100);
+  if (Sec27ASetState == LOW) {
+    if (PrevSec27ASetState == HIGH) {
+      Serial.println("27a security has just entered Set State");
+      VBNumber = 02;  // 27a Security Set code
+      VBNumberString = "02";
+      ProxyPost();
+      ProxyRequestText = "Alarm is Set";
+      RotateProxyLogArray();
+    }
+  }
+
+
+  if (Sec27ASetState == HIGH) {
+    if (PrevSec27ASetState == LOW) {
+      Serial.println("27a security has just entered Unset State ");
+      VBNumber = 03;  // 27a Security Unset code
+      VBNumberString = "03";
+      ProxyPost();
+      ProxyRequestText = "Alarm is UnSet";
+      RotateProxyLogArray();
+    }
+  }
+
+
+  Sec27ASoundingState = !digitalRead(AlarmSoundingInputPin);  // Used for Detecting the Alarm sounding
+  delay(100);
+  if (Sec27ASoundingState == LOW) {
+    if (PrevSec27ASoundingState == HIGH) {
+      Serial.println("27a security  has just gone into the alarm sounding state ");
+      VBNumber = 04;  // 27a Security Sounding code
+      VBNumberString = "04";
+      ProxyPost();
+      ProxyRequestText = "Alarm is Sounding";
+      RotateProxyLogArray();
+    }
+  }
+
+
+  if (Sec27ASoundingState == HIGH) {
+    if (PrevSec27ASoundingState == LOW) {
+      Serial.println("27a security has just stopped sounding ");
+      ProxyRequestText = "Alarm has stopped Sounding";
+      RotateProxyLogArray();
+    }
+  }
+
+  PrevSec27ASoundingState = Sec27ASoundingState;  // remember prev state for next pass
+  PrevSec27ASetState = Sec27ASetState;            // edge detection of Burglar Alarm state
+
+  if (wifiConnected) {
+    // digitalWrite(LedPin, LOW); // turn on LED with voltage Low
+    upnpBroadcastResponder.serverLoop();
+
+    Sec27APanic->serverLoop();
+    Sec27AUnset->serverLoop();
+    Sec27ASet->serverLoop();
+  }
+
+  WatchDogLoopCounter = WatchDogLoopCounter + 1;
+  //Serial.println(WatchDogLoopCounter);
+  if (WatchDogLoopCounter > WatchDogCounterLoopThreshold) {
+    //PanelBuzzerCount = (PanelBuzzerCountThreshold - 4);
+    WatchDogLoopCounter = 0;
+    VBNumber = 40;  // 27A security watchdog code
+    WatchDogPost();
+  }
+
+
+
+  //Keep time
+  if (millis() >= (previousMillis)) {
+    //Serial.print(" millis = ");
+
+    previousMillis = previousMillis + 1000;
+    //Serial.print(" prevmillis = ");
+    //Serial.print(String (previousMillis));
+    // should be here every second...
+
+    // Maintain RTC
+
+    currentseconds = currentseconds + 1;
+    if (currentseconds == 60) {
+      // Things to do every second here
+      currentseconds = 0;
+      currentminutes = currentminutes + 1;
+      //Serial.println("another minute has passed");
+    }
+    if (currentminutes == 60) {
+
+
+      // Things to do every hour here
+      currentminutes = 0;
+      currenthours = currenthours + 1;
+      UpTimeDays = UpTimeDays + 0.0417;  // (1/24)
+                                         //Serial.println("UpTimeDays =  " + String(UpTimeDays) );
+    }
+    if (currenthours == 24) {
+      // Things to do every day here
+      currentseconds = 0;
+      currentminutes = 0;
+      currenthours = 0;
+      ProxyRequestText = "Midnight Rollover";
+      RotateProxyLogArray();
+      //SetTime();  // resync the clock
+
+
+      //UpTimeDays = UpTimeDays + 0.5; IDK why but it sometimes counts 2X at this point
+    }
+
+    //Detect 09:45 and resync the RTC
+    if (currenthours == 9) {
+      if (currentminutes == 45) {
+        if (currentseconds == 0) {
+
+          ProxyRequestText = "Its 09:45, as good time as any to resync";
+          RotateProxyLogArray();
+          SetTime();           // resync the clock
+          currentseconds = 1;  //make sure this only runs once
+        }
+      }
+    }
+
+  }  // end 1 second
+
+
+  // Check if the AlarmSetLockout needs to be released
+
+  if (AlarmSetLockout == HIGH) {  // lockout is active
+    AlarmSetLockoutCounter = AlarmSetLockoutCounter + 1;
+    Serial.println(AlarmSetLockoutCounter);
+    if (AlarmSetLockoutCounter > AlarmSetLockoutCounterThreshold) {  // its time to release lockout
+      AlarmSetLockout = LOW;                                         // reset the lockout for the turn on function
+      AlarmSetLockoutCounter = 0;                                    //Dump for next time
+    }
+  }
+
+
+  server.handleClient();  // Processes web requests in milliseconds
+
+  //Bluetooth section
+
+
+  static unsigned long lastBleCycle = 0;
+  if (millis() - lastBleCycle > 10000) {
+    pBLEScan->start(SCAN_TIME, false);
+
+    Serial.println("\n--- Active BLE Tokens In Range ---");
+    unsigned long currentMillis = millis();
+    int activeCount = 0;
+
+    for (int i = 0; i < deviceCount; i++) {
+      if (currentMillis - discoveredDevices[i].lastSeen < 30000) {
+        Serial.print("MAC: ");
+        Serial.print(discoveredDevices[i].macAddress);
+        Serial.print(" | RSSI: ");
+        Serial.print(discoveredDevices[i].rssi);
+        Serial.print(" dBm | ");
+
+        unsigned long totalTimeSec = (currentMillis - discoveredDevices[i].firstSeen) / 1000;
+        if (totalTimeSec >= 60) {
+          Serial.println("First seen: > 1 min ago");
+        } else {
+          Serial.print("First seen: ");
+          Serial.print(totalTimeSec);
+          Serial.println("s ago");
+        }
+        activeCount++;
+      }
+    }
+
+    if (activeCount == 0) {
+      Serial.println("No active beacons nearby.");
+    }
+    Serial.println("----------------------------------");
+
+    pBLEScan->clearResults();
+    lastBleCycle = millis();
+  }
+
+
+
+}  // end Void Loop
+
+
+void handleRoot() {
+
+  Serial.println("New Client in handleRoot.");  // print a message out in the serial port
+
+  Serial.println("server.hostHeader()");
+  Serial.println(server.hostHeader());
+  Serial.println("server.uri()");
+  Serial.println(server.uri());
+  Serial.println("server.key()");
+  Serial.println(server.arg("key"));
+  Serial.print("Target Uri: ");
+  Serial.println(server.uri());
+
+  // Start building your HTML response string
+  // --- START OF HTML WEB PAGE ---
+  String html = "<!DOCTYPE html><html>";
+
+  html += "<head><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">";
+  html += "<link rel=\"icon\" href=\"data:,\">";
+
+  // Auto-refresh the page every 5 seconds to keep the BT list live
+  html += "<meta http-equiv='refresh' content='5'>";
+
+  // Simple CSS styling for mobile-responsiveness
+  html += "<style>html { font-family: Helvetica; display: inline-block; margin: 0px auto; text-align: center;}";
+  html += ".button { background-color: #4CAF50; border: none; color: white; padding: 16px 40px;";
+  html += "text-decoration: none; font-size: 30px; margin: 2px; cursor: pointer;}";
+  html += ".button2 {background-color: #555555;}</style></head>";
+
+  // Web Page Heading
+  html += "<body><h1>27A Security Interface Log</h1>";
+
+  // Display current state, and show ON/OFF buttons
+  html += "<p>LED Status: <strong>" + ledState + "</strong></p>";
+  if (ledState == "OFF") {
+    html += "<p><a href=\"/H\"><button class=\"button\">TURN ON</button></a></p>";
+
+  } else {
+    html += "<p><a href=\"/L\"><button class=\"button button2\">TURN OFF</button></a></p>";
+  }
+
+  //Display Alarm set/Unset State
+
+  if (Sec27ASetState == HIGH) {  // High is alarm unset state
+    html += "<p>Alarm Panel Status: <strong> UNSET (disabled/off) </strong></p>";
+    html += "<p><a href=\"/SET\"><button class=\"button\">SET Alarm</button></a></p>";
+
+  } else {
+    html += "<p>Alarm Panel Status: <strong> SET (enabled/on) </strong></p>";
+    html += "<p><a href=\"UNSET\"><button class=\"button button2\">UnSET Alarm</button></a></p>";
+  }
+
+  // --- INJECT THE BLUETOOTH TABLE HERE ---
+  html += "<h3>Active Bluetooth Tokens (RSSI > " + String(rssiThreshold) + " dBm)</h3>";
+  html += "<table border='1' align='center' style='margin-bottom: 20px; width: 80%; max-width: 500px;'>";
+  html += "<tr><th>MAC Address</th><th>RSSI</th><th>Duration</th></tr>";
+
+  unsigned long currentMillis = millis();
+  int count = 0;
+
+  for (int i = 0; i < deviceCount; i++) {
+    if (currentMillis - discoveredDevices[i].lastSeen < 30000) {
+      html += "<tr><td>" + discoveredDevices[i].macAddress + "</td>";
+      html += "<td>" + String(discoveredDevices[i].rssi) + " dBm</td>";
+
+      unsigned long totalTimeSec = (currentMillis - discoveredDevices[i].firstSeen) / 1000;
+      if (totalTimeSec >= 60) {
+        html += "<td>> 1 min ago</td></tr>";
+      } else {
+        html += "<td>" + String(totalTimeSec) + "s ago</td></tr>";
+      }
+      count++;
+    }
+  }
+
+  if (count == 0) {
+    html += "<tr><td colspan='3' style='color: red;'>No authorized tokens in range.</td></tr>";
+  }
+  html += "</table>";
+
+
+  // display proxy log
+  // Display date
+  html += "<p>Current Date is " + String(currentday) + " / " + String(currentmonth) + "</p>";
+
+
+  // Display current time of day
+  html += "<p>Current Time is " + String(currenthours) + ":" + String(currentminutes) + ":" + String(currentseconds) + ":" + "</p>";
+
+  // Display last Reboot Time
+  html += "<p>Last Restart was " + LastRebootTime + " on " + LastRebootDate + " which was " + String(UpTimeDays) + " days ago" + "</p>";
+
+  //Serial.println("about to write headers .");
+  // 1. Explicitly display the table headers from your dedicated slots (60, 61, 62)
+  html += "<h3>" + ProxyLogArray[60] + " &nbsp;&nbsp;&nbsp; " + ProxyLogArray[61] + " &nbsp;&nbsp;&nbsp; " + ProxyLogArray[62] + "</h3>";
+  //Serial.println("headers written.");
+  // 2. Display event logs (Indices 57 down to 0)
+  // Starts precisely at 57 (the newest event date entry)
+  for (ProxyLogArrayIndex = 57; ProxyLogArrayIndex >= 0; ProxyLogArrayIndex = ProxyLogArrayIndex - 3) {
+
+    // Safely grab the 3 pieces of data without overshooting index 59
+    String entryDate = ProxyLogArray[ProxyLogArrayIndex];
+    String entryTime = ProxyLogArray[ProxyLogArrayIndex + 1];
+    String entryEvent = ProxyLogArray[ProxyLogArrayIndex + 2];
+    //Serial.println("collected arraydata.");
+    // Only print the line if it actually contains a log entry
+    if (entryDate.length() > 0 || entryEvent.length() > 0) {
+      html += "<p>" + entryDate + " &nbsp;&nbsp;&nbsp;&nbsp; " + entryTime + " &nbsp;&nbsp;&nbsp;&nbsp; " + entryEvent + "</p>";
+    }
+  }
+  //Serial.println("Completed logging html.");
+
+  //Display Clock Resync, Spare1 Buttons, Spare2 Button
+  html += "<p><a href=\"/RTCReSync\"><button class=\"buttonsmall\">RTC ReSync</button></a> <a href=\"/Reboot\"><button class=\"buttonsmall\">Reboot</button></a> <a href=\"/ProxyLog2\"> <button class=\"buttonsmall\">Spare2</button></a></p>";
+
+
+
+  html += "</body></html>";
+
+
+  // --- END OF HTML WEB PAGE ---
+
+  // Instantly send the full page text to the browser non-blockingly
+  server.send(200, "text/html", html);
+
+
+}  // end of handleroot
+
+
+
+
+bool Sec27ASetOn() {
+  Serial.println("Request to Set Burglar Alarm received SW #1 On...");
+
+  ProxyRequestText = "Alexa or Local Web Set Request";
+  RotateProxyLogArray();
+
+  if (Sec27ASetState == HIGH) {  // only pulse relay if Burglar Alarm is currently Unset
+    //sometimes alexa sends this request again about 2 secs later which turned the alarm off again on the second request
+    // we need to lockout multiple turn on requests that are received in quick succession
+    // or maybe, just extend the pulse duration ? (was 1 sec) - didnt work...
+    if (AlarmSetLockout == LOW) {  // only allows set routine to run once, initally needed the alarm off request to release this
+      // but this gave rise to problems if the alarm was set via alexa and reset via keypads or RF remote.
+      // changed to reset automatically after 5 secs
+
+      Serial.println("Burglar Alarm is Unset - pulsing relay to Set it");
+      AlarmSetLockout = HIGH;  // set the lockout
+
+      Serial.println("XXX Pulsing Relay on ...");
+
+      // Turn on #1 Relay
+      delay(10);
+      Serial.write(rel1ON, sizeof(rel1ON));
+      delay(10);
+      Serial.println("Turning Relay#1 On ...");
+      ProxyRequestText = "Set Request Honored";
+      RotateProxyLogArray();
+
+      // Turn on #1 Relay
+      delay(10);
+      Serial.write(rel1ON, sizeof(rel1ON));
+      delay(10);
+      Serial.println("Turning Relay#1 On ...");
+
+      delay(1500);
+      ;
+
+      Serial.println("XXX Pulsing Relay off again ...");  // this makes a pulse which is what the security system wants
+
+      // Turn off #1 Relay
+      delay(10);
+      Serial.write(rel1OFF, sizeof(rel1OFF));
+      delay(10);
+      Serial.println("Turning Relay#1 Off ...");
+      //ProxyRequestText = "Relay 1 pulsing off - set";
+      //RotateProxyLogArray();
+
+      // Turn off #1 Relay
+      delay(10);
+      Serial.write(rel1OFF, sizeof(rel1OFF));
+      delay(10);
+      Serial.println("Turning Relay#1 Off ...");
+    }
+  } else {
+    Serial.println("27A Security is already Set - not pulsing relay!");
+    ProxyRequestText = "Set Request NOT Honored, already set";
+    RotateProxyLogArray();
+  }
+
+  isSec27ASetOn = false;
+  return Sec27ASetState;
+}
+
+bool Sec27ASetOff() {
+
+  Serial.println("Request to Set 27A Security received SW#1 Off ...");
+  Serial.println("This should never happen");
+
+  isSec27ASetOn = false;
+  return Sec27ASetState;
+}
+
+bool Sec27AUnsetOn() {
+  Serial.println("Request to Unset 27A Security received SW#2 On");
+  ProxyRequestText = "Alexa or Local Web Unset Request";
+  RotateProxyLogArray();
+
+  if (Sec27ASetState == LOW) {  // only pulse relay if Burglar Alarm is currently Set
+    Serial.println("XXX Pulsing Relay on ...");
+    // AlarmSetLockout = LOW; // reset the lockout for the turn on function
+    // this in asymetric and doesnt have a lockout for preventing multiple offs like the on function
+    // becasue the alarm unsets immediatly and prevents any subsequent requests from alexa as being
+    // processed as on commands.
+    // I think.
+
+    // Turn on #1 Relay
+    delay(10);
+    Serial.write(rel1ON, sizeof(rel1ON));
+    delay(10);
+    Serial.println("Turning Relay#1 On ...");
+    ProxyRequestText = "UnSet Request Honored";
+    RotateProxyLogArray();
+
+    // Turn on #1 Relay
+    delay(10);
+    Serial.write(rel1ON, sizeof(rel1ON));
+    delay(10);
+    Serial.println("Turning Relay#1 On ...");
+
+    delay(1500);  // 1.5 sec pulse
+    ;
+
+    Serial.println("XXX Pulsing Relay off again ...");  // this makes a pulse which is what the security system wants
+
+    // Turn off #1 Relay
+    delay(10);
+    Serial.write(rel1OFF, sizeof(rel1OFF));
+    delay(10);
+    Serial.println("Turning Relay#1 Off ...");
+    //ProxyRequestText = "Pulsing relay 1 off - unset";
+    //RotateProxyLogArray();
+
+    // Turn off #1 Relay
+    delay(10);
+    Serial.write(rel1OFF, sizeof(rel1OFF));
+    delay(10);
+    Serial.println("Turning Relay#1 Off ...");
+  } else {
+    Serial.println("27A Security is already Unset, not pulsing relay...");
+    ProxyRequestText = "UnSet Request NOT Honored - already Unset";
+    RotateProxyLogArray();
+  }
+
+  isSec27AUnsetOn = false;
+  return Sec27ASetState;
+}
+
+bool Sec27AUnsetOff() {
+
+  Serial.println("Request to Unset 27A Security received (SW#2 Off)");
+  Serial.println("This should never happen");
+
+  isSec27AUnsetOn = false;
+  return Sec27ASetState;
+}
+
+bool Sec27APanicOn() {
+  Serial.println("Request to set Panic Mode received SW#3 On");
+  ProxyRequestText = "Alexa Panic Request";
+  RotateProxyLogArray();
+  // Turn on #2 Relay
+  delay(10);
+  Serial.write(rel2ON, sizeof(rel2ON));
+  delay(10);
+  Serial.println("Turning Relay#2 On ...");
+  //ProxyRequestText = "Relay 2 pulsing on - panic";
+  //RotateProxyLogArray();
+
+  // Turn on #2 Relay
+  delay(10);
+  Serial.write(rel2ON, sizeof(rel2ON));
+  delay(10);
+
+  delay(1500);  // 1.5 sec pulse
+
+  // Turn off #2 Relay
+  delay(10);
+  Serial.write(rel2OFF, sizeof(rel2OFF));
+  delay(10);
+  Serial.println("Turning Relay#2 Off ...");
+  //ProxyRequestText = "Relay 2 pulsing off - panic";
+  //RotateProxyLogArray();
+  // Turn off #2 Relay
+  delay(10);
+  Serial.write(rel2OFF, sizeof(rel2OFF));
+  delay(10);
+  Serial.println("Turning Relay#2 Off ...");
+
+
+
+
+
+  isSec27APanicOn = false;
+  return isSec27APanicOn;
+}
+
+bool Sec27APanicOff() {
+
+  Serial.println("Request to stop Panic Mode received (SW#3 Off)");
+  ProxyRequestText = "Alexa Panic Off Request";
+  RotateProxyLogArray();
+
+  // Turn off #2 Relay
+  delay(10);
+  Serial.write(rel2OFF, sizeof(rel2OFF));
+  delay(10);
+  Serial.println("Turning Relay#2 Off ...");
+  //ProxyRequestText = "Relay 2 pulsing off - panic";
+  //RotateProxyLogArray();
+  // Turn off #2 Relay
+  delay(10);
+  Serial.write(rel2OFF, sizeof(rel2OFF));
+  delay(10);
+  Serial.println("Turning Relay#2 Off ...");
+
+
+  isSec27APanicOn = false;
+  return Sec27ASetState;
+}
+
+// connect to wifi – returns true if successful or false if not
+boolean connectWifi() {
+  boolean state = true;
+  int i = 0;
+
+  WiFi.mode(WIFI_STA);
+
+
+  // Configures static IP address
+  if (!WiFi.config(local_IP, gateway, subnet, primaryDNS, secondaryDNS)) {
+    Serial.println("STA Failed to configure");
+    // this locked in ip address made the clock sync fail untill i added the DNS bits
+    // if this is an issue, fix by locking mac address to ip address in the router config instead (not done as at June2026)
+  }
+  WiFi.begin(ssid, password);
+  Serial.println("");
+  Serial.println("Connecting to WiFi Network");
+
+  // Wait for connection
+  Serial.print("Connecting ...");
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(5000);
+    Serial.print(".");
+    if (i > 10) {
+      state = false;
+      break;
+    }
+    i++;
+  }
+
+  if (state) {
+    Serial.println("");
+    Serial.print("Connected to ");
+    Serial.println(ssid);
+    Serial.print("IP address: ");
+    Serial.println(WiFi.localIP());
+  } else {
+    Serial.println("");
+    Serial.println("Connection failed. Bugger");
+  }
+
+  return state;
+}
+
+void ProxyPost() {
+  //TwitchLED();
+  // assumes VBNumber set to desired VB call to be made
+
+  // 2 is Burglar Alarm has Seted
+  // 3 is Burglar Alarm is Unset
+  // 4 is Burglar Alarm Sounding
+  Serial.print("Requesting POST to Proxy ");
+  Serial.println(VBNumberString);
+
+  WiFiClient client;
+  const int httpPort = 80;
+  if (!client.connect(WatchDogHost, httpPort)) {
+    Serial.println("connection failed");
+    return;
+  }
+
+  String data = "";
+
+  // Send request to the server:
+  client.println("POST / HTTP/1.1");
+  //Serial.println("VB button"+(String(VBNumber))+" request sent");
+  /*
+// this gave problems as the data transmitted had no leading zero and the watchdog falsely matched it with values in the 30 range
+  client.println("Host: ProxyRequest" + (String(VBNumber)));  // this endpoint value gets to the server and is used to transfer the identity of the calling slave
+  Serial.println("Host: ProxyRequest" + (String(VBNumber)));  //
+*/
+  client.println("Host: ProxyRequest" + VBNumberString);  // this endpoint value gets to the server and is used to transfer the identity of the calling slave
+  Serial.println("Host: ProxyRequest" + VBNumberString);  // send to serial port as well
+  client.println("Accept: */*");                          // this gets to the server!
+  client.println("Content-Type: application/x-www-form-urlencoded");
+  client.print("Content-Length: ");
+  client.println(data.length());
+  client.println();
+  client.print(data);
+
+  delay(500);  // Can be changed
+  if (client.connected()) {
+    client.stop();  // DISCONNECT FROM THE SERVER
+  }
+  Serial.println();
+  Serial.println("closing connection");
+  delay(1000);
+}  // end ProxyPost
+
+void WatchDogPost() {
+
+  //TwitchLED();
+
+  // assumes VBNumber set to desired VB call to be made
+  VBNumber = 40;  // 27A security watchdog code
+  // 40 is Burglar Alarm watchdog
+
+  Serial.print("Requesting POST to WatchDog ");
+  Serial.println(VBNumber);
+
+  WiFiClient client;
+  const int httpPort = 80;
+  if (!client.connect(WatchDogHost, httpPort)) {
+    Serial.println("connection failed");
+    return;
+  }
+
+  String data = "";
+
+  // Send request to the server:
+  client.println("POST / HTTP/1.1");
+  Serial.println("VB button" + (String(VBNumber)) + " request sent");
+  client.println("Host: WatchDog Endpoint" + (String(VBNumber)));  // this endpoint value gets to the server and is used to transfer the identity of the calling slave
+  client.println("Accept: */*");                                   // this gets to the server!
+  client.println("Content-Type: application/x-www-form-urlencoded");
+  client.print("Content-Length: ");
+  client.println(data.length());
+  client.println();
+  client.print(data);
+
+  delay(500);  // Can be changed
+  if (client.connected()) {
+    client.stop();  // DISCONNECT FROM THE SERVER
+  }
+  Serial.println();
+  Serial.println("closing connection");
+  delay(1000);
+}  // end WatchDogPost
+
+void TwitchLED() {
+
+  pinMode(LedPin, OUTPUT);  // switch to an output
+
+  digitalWrite(LedPin, LOW);
+  delay(10);
+  digitalWrite(LedPin, HIGH);
+
+  //pinMode(LedPin, INPUT); // switch back to an input
+}  // end TwitchLED
+
+void SetTime() {
+
+  // AL Suggestion
+
+
+  SetTimeWasSuccesfull = 0;
+
+  Serial.println(" trying to synch clock...");
+  Serial.println("Setting time using SNTP");
+  configTime(-13 * 3600, DSTOffset, "pool.ntp.org", "time.nist.gov");
+
+
+  time_t now = time(nullptr);
+  int SNTPtimeoutCounter = 0;  // 1. Add a counter to track attempts
+
+  // Loop runs while time is invalid AND we haven't hit the 10-second timeout (50 * 200ms)
+  while (now < 100 && SNTPtimeoutCounter < 50) {
+    delay(200);
+    Serial.print(".");
+    Serial.print(String(now));
+    now = time(nullptr);
+    SNTPtimeoutCounter++;  // Increment counter
+  }
+  Serial.println("");
+
+  // 2. LOG THE FAILURE OR SUCCESS HERE
+  if (now < 100) {
+    ProxyRequestText = "RTC ReSync FAILED - SNTP Timeout After " + String((SNTPtimeoutCounter) + 1) + " Attempts";
+    RotateProxyLogArray();
+    Serial.println("Error: Failed to resync time. SNTP timeout reached.");
+    SetTimeWasSuccesfull = 0;
+  } else {
+    Serial.println("Success: Time synchronized successfully!");
+    ProxyRequestText = "RTC ReSync Success after " + String((SNTPtimeoutCounter) + 1) + " Attempts";
+    RotateProxyLogArray();
+    Serial.println("after RotateProxyLog!");
+    SetTimeWasSuccesfull = 1;
+  }
+
+  struct tm* timeinfo;  //http://www.cplusplus.com/reference/ctime/tm/
+  time(&now);
+  timeinfo = localtime(&now);
+  Serial.println(timeinfo->tm_mon);
+  Serial.println(timeinfo->tm_mday);
+  Serial.println(timeinfo->tm_hour);
+  Serial.println(timeinfo->tm_min);
+  Serial.println(timeinfo->tm_sec);
+  currentseconds = timeinfo->tm_sec;
+  currentminutes = timeinfo->tm_min;
+  currenthours = timeinfo->tm_hour;
+  currentday = timeinfo->tm_mday;
+  currentmonth = timeinfo->tm_mon;
+  currentmonth = currentmonth + 1;  // month counted from 0
+  currentday = currentday + 1;      // day counted from 0 (I think)
+  currenthours = currenthours + 1;  // it was an hour out in testing , might actually be DST issue, IDK
+
+  //ProxyRequestText = "RTC ReSync Success";
+  //RotateProxyLogArray();
+  Serial.println("end of SetTime!");
+}  // End SetTime
+
+void RotateProxyLogArray() {
+  //Serial.println("start of RotateProxyLogArray!");
+
+  // Rotates ProxyLogArray[64] one slot to the left (toward index 0)
+  // Safely rotates ProxyLogArray[64] three slots to the left
+  // Loop stops at 60 so that (60 + 3) equals the maximum index of 63
+  // Loop stops at 57. The highest slot read is 57 + 3 = 60.
+
+  for (ProxyLogArrayIndex = 0; ProxyLogArrayIndex < 57; ProxyLogArrayIndex = ProxyLogArrayIndex + 1) {
+
+    ProxyLogArray[ProxyLogArrayIndex] = ProxyLogArray[(ProxyLogArrayIndex + 3)];
+  }
+
+  //Serial.println("Rotate complete!");
+  //Populate new log entry
+  ProxyLogArray[57] = (String(currentday) + " / " + String(currentmonth));
+  ProxyLogArray[58] = (String(currenthours) + ":" + String(currentminutes) + ":" + String(currentseconds));
+  ProxyLogArray[59] = (String(ProxyRequestText));
+  //TwitchLED();
+  //Serial.println("end of RotateProxyLog");
+}  // end RotateProxyLogArray
+
+
+
+void handleRTCReSync() {
+  Serial.println("Button Pressed: RTC ReSync triggered!");
+
+  SetTime();
+
+    // Send an HTTP Redirect (303) back to the main page immediately
+    server.sendHeader("Location", "/");
+  server.send(303, "text/plain", "Redirecting...");
+}
+
+void handleReboot() {
+  Serial.println("Button Pressed: ESP32 Rebooting in 10 seconds");
+
+  server.send(200, "text/html", "<h2>Device is restarting. Please wait 10 seconds...</h2>");
+  delay(1000);
+  ESP.restart();  // Software resets the chip
+}
+
+void handleProxyLog2() {
+  Serial.println("Button Pressed: Spare2/ProxyLog2 triggered!");
+
+  // Put whatever feature you want for the spare button here
+
+  server.sendHeader("Location", "/");
+  server.send(303, "text/plain", "Redirecting...");
+}
+
+void handleLedOn() {
+  Serial.println("Button Pressed: LED On");
+  digitalWrite(LedPin, LOW);
+  Serial.println("Turning LED On ...");
+  ledState = "ON";
+
+
+  server.sendHeader("Location", "/");
+  server.send(303, "text/plain", "Redirecting...");
+}
+
+void handleLedOff() {
+  Serial.println("Button Pressed: LED Off");
+
+  digitalWrite(LedPin, HIGH);
+  Serial.println("Turning LED Off ...");
+  ledState = "OFF";
+
+  server.sendHeader("Location", "/");
+  server.send(303, "text/plain", "Redirecting...");
+}
+
+void handleSet() {
+  Serial.println("Button Pressed: Alarm Set");
+
+  Sec27ASetOn();
+
+
+  server.sendHeader("Location", "/");
+  server.send(303, "text/plain", "Redirecting...");
+}
+
+void handleUnSet() {
+  Serial.println("Button Pressed: Alarm UnSet");
+
+  Sec27AUnsetOn();
+
+  server.sendHeader("Location", "/");
+  server.send(303, "text/plain", "Redirecting...");
+}
+
+
+/*
+       // Process button actions embedded in URL paths
+        if (server.uri().indexOf("/H") >= 0 ) {
+          digitalWrite(LedPin, LOW);
+          Serial.println("Turning LED On ...");
+          ledState = "ON";
+        }
+        if (server.uri().indexOf("/L") >= 0 ) {
+          digitalWrite(LedPin, HIGH);
+          Serial.println("Turning LED Off ...");
+          ledState = "OFF";
+        }
+        if (server.uri().indexOf("/SET") >= 0 ) {
+          Sec27ASetOn();
+        }
+        if (server.uri().indexOf("/UNSET") >= 0 ) {
+          Sec27AUnsetOn();
+        }
+        if (server.uri().indexOf("/RTCReSync") >= 0 ) {
+          SetTime();
+        }
+        if (server.uri().indexOf("/Reboot") >= 0 ) {
+          ESP.restart();
+        }
+*/
