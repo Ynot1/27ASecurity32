@@ -8,7 +8,7 @@
 
 // Bluetooth section
 
-int rssiThreshold = -40;  // Predefined threshold in dBm (closer to 0 is stronger)
+int rssiThreshold = -40;  // Predefined threshold in dBm (closer to 0 is stronger) will be defined on web page eventually
 #include <BLEDevice.h>
 #include <BLEUtils.h>
 #include <BLEScan.h>
@@ -23,11 +23,77 @@ struct TrackedBeacon {
   int rssi;
   unsigned long lastSeen;
   unsigned long firstSeen;
+  String deviceType; // <-- Add this to store the name/manufacturer
 };
 
 const int MAX_DEVICES = 10;
 TrackedBeacon discoveredDevices[MAX_DEVICES];
 int deviceCount = 0;
+
+String IdentifyManufacturer(String macAddress) {
+  macAddress.toUpperCase();
+
+  // 1. Direct Hardcoded Matches (Must use UPPERCASE letters!)
+if (macAddress == "CC:4F:9D:84:98:96") return "Tony's Keys";
+if (macAddress == "E7:7B:6A:00:9E:FE") return "Tony's Wallet??";
+
+  // 2. Extract first 3 bytes (the OUI prefix e.g., "00:05:78")
+  String prefix = macAddress.substring(0, 8);
+
+  // --- NEW: LG Smart TVs & Appliances ---
+  // Covers LG Electronics, LG Innotek, and standard LG network modules
+  if (prefix == "AC:5A:F0" || prefix == "00:05:C9" || prefix == "00:1C:62" || 
+      prefix == "1C:5A:6B" || prefix == "20:28:BC" || prefix == "34:FC:B9" || 
+      prefix == "4C:12:9F" || prefix == "98:D6:BB" || prefix == "A4:08:EA") {
+    return "LG Smart TV";
+  }
+
+  // --- NEW: Samsung Smart TVs ---
+  // Covers major Samsung Electronics TV chassis and internal Bluetooth modules
+  if (prefix == "00:00:F0" || prefix == "00:07:AB" || prefix == "00:16:32" || 
+      prefix == "30:62:22" || prefix == "50:CC:F8" || prefix == "64:1B:2F" || 
+      prefix == "9C:73:B1" || prefix == "DC:87:F8" || prefix == "E0:03:6B") {
+    return "Samsung Smart TV";
+  }
+
+  // Apple Ecosystem (iPhones, Watches, iPads, AirTags)
+  if (prefix == "00:05:78" || prefix == "00:0A:95" || prefix == "00:10:FA" || 
+      prefix == "00:1C:B3" || prefix == "10:DD:B1" || prefix == "14:10:9F" || 
+      prefix == "D0:25:98" || prefix == "E0:C9:7A") {
+    return "Apple Device";
+  }
+
+  // Google / Alphabet / Nest
+  if (prefix == "3C:5A:B4" || prefix == "D8:EB:97" || prefix == "00:1A:11") {
+    return "Google Device";
+  }
+
+  // Samsung Mobile / General (Distinct from targeted TV modules if needed)
+  if (prefix == "BC:D1:D3" || prefix == "00:12:47" || prefix == "38:AA:3C" || 
+      prefix == "A8:7B:39" || prefix == "CC:C7:60") {
+    return "Samsung Mobile";
+  }
+
+  // Espressif Systems (Other ESP32 or ESP8266 smart devices in your house)
+  if (prefix == "24:4B:03" || prefix == "30:AE:A4" || prefix == "A4:CF:12" || 
+      prefix == "C8:2B:96" || prefix == "EC:FA:BC") {
+    return "Espressif (ESP32)";
+  }
+
+  // Amazon (Echo dots, Kindles, Fire sticks)
+  if (prefix == "00:BB:3A" || prefix == "50:DC:E7" || prefix == "FC:A1:3E") {
+    return "Amazon Echo/Device";
+  }
+
+  // 3. Fallback Smart Check: Detect Randomized Privacy Addresses
+  // If the second character of the MAC is 2, 6, A, or E, it is a randomized address
+  char privateChar = macAddress.charAt(1);
+  if (privateChar == '2' || privateChar == '6' || privateChar == 'A' || privateChar == 'E') {
+    return "Private Smartphone/Tablet";
+  }
+
+  return "Unknown Brand";
+}
 
 class MyAdvertisedDeviceCallbacks : public BLEAdvertisedDeviceCallbacks {
   void onResult(BLEAdvertisedDevice advertisedDevice) {
@@ -40,13 +106,14 @@ class MyAdvertisedDeviceCallbacks : public BLEAdvertisedDeviceCallbacks {
     Serial.print(currentMac);
     Serial.print(" | RSSI: ");
     Serial.println(currentRssi);
+    Serial.println(IdentifyManufacturer(currentMac));
     // --------------------------------------------------
 
     // Ignore the device completely if the signal is too weak
     if (currentRssi < rssiThreshold) {
       return;
     }
-
+String manufacturer = IdentifyManufacturer(currentMac);
 
     unsigned long now = millis();
 
@@ -62,6 +129,7 @@ class MyAdvertisedDeviceCallbacks : public BLEAdvertisedDeviceCallbacks {
 
         discoveredDevices[i].rssi = currentRssi;
         discoveredDevices[i].lastSeen = now;
+        discoveredDevices[i].deviceType = manufacturer; 
         found = true;
         break;
       }
@@ -72,6 +140,7 @@ class MyAdvertisedDeviceCallbacks : public BLEAdvertisedDeviceCallbacks {
       discoveredDevices[deviceCount].rssi = currentRssi;
       discoveredDevices[deviceCount].lastSeen = now;
       discoveredDevices[deviceCount].firstSeen = now;
+      discoveredDevices[deviceCount].deviceType = manufacturer; // Save details
       deviceCount++;
     }
   }
@@ -570,14 +639,22 @@ void handleRoot() {
 
   Serial.println("New Client in handleRoot.");  // print a message out in the serial port
 
-  Serial.println("server.hostHeader()");
-  Serial.println(server.hostHeader());
-  Serial.println("server.uri()");
-  Serial.println(server.uri());
-  Serial.println("server.key()");
-  Serial.println(server.arg("key"));
-  Serial.print("Target Uri: ");
-  Serial.println(server.uri());
+  
+
+
+  //Serial.print("Incoming Request URI: ");
+//Serial.println(request->url());  Compilation error: 'request' was not declared in this scope
+
+//Serial.print("Host Header Data: ");
+//Serial.println(request->hostHeader());
+
+/* Serial.print("Checking 'key' argument: ");
+if (request->hasArg("key")) {
+  Serial.println(request->arg("key"));
+} else {
+  Serial.println("No 'key' argument found in URL");
+}
+*/
 
   // Start building your HTML response string
   // --- START OF HTML WEB PAGE ---
@@ -617,15 +694,20 @@ void handleRoot() {
     html += "<p>Alarm Panel Status: <strong> SET (enabled/on) </strong></p>";
     html += "<p><a href=\"UNSET\"><button class=\"button button2\">UnSET Alarm</button></a></p>";
   }
-
+/*
   // --- INJECT THE BLUETOOTH TABLE HERE ---
   html += "<h3>Active Bluetooth Tokens (RSSI > " + String(rssiThreshold) + " dBm)</h3>";
   html += "<table border='1' align='center' style='margin-bottom: 20px; width: 80%; max-width: 500px;'>";
   html += "<tr><th>MAC Address</th><th>RSSI</th><th>Duration</th></tr>";
+*/
+// --- INJECT THE BLUETOOTH TABLE HERE ---
+html += "<h3>Active Bluetooth Tokens (RSSI > " + String(rssiThreshold) + " dBm)</h3>";
+html += "<table border='1' align='center' style='margin-bottom: 20px; width: 90%; max-width: 600px;'>"; // Slightly widened table for extra data
+html += "<tr><th>MAC Address</th><th>Device Info</th><th>RSSI</th><th>Duration</th></tr>"; // Added Device Info header
 
   unsigned long currentMillis = millis();
   int count = 0;
-
+/*
   for (int i = 0; i < deviceCount; i++) {
     if (currentMillis - discoveredDevices[i].lastSeen < 30000) {
       html += "<tr><td>" + discoveredDevices[i].macAddress + "</td>";
@@ -646,6 +728,32 @@ void handleRoot() {
   }
   html += "</table>";
 
+*/
+
+for (int i = 0; i < deviceCount; i++) {
+    if (currentMillis - discoveredDevices[i].lastSeen < 30000) {
+      html += "<tr><td>" + discoveredDevices[i].macAddress + "</td>";
+      
+      // NEW: Inject the Manufacturer info into the second column
+      html += "<td>" + discoveredDevices[i].deviceType + "</td>";
+      
+      html += "<td>" + String(discoveredDevices[i].rssi) + " dBm</td>";
+
+      unsigned long totalTimeSec = (currentMillis - discoveredDevices[i].firstSeen) / 1000;
+      if (totalTimeSec >= 60) {
+        html += "<td>> 1 min in range</td></tr>";
+      } else {
+        html += "<td>" + String(totalTimeSec) + "s in range</td></tr>";
+      }
+      count++;
+    }
+  }
+
+  if (count == 0) {
+    // Updated colspan from 3 to 4 to stretch cleanly across the new layout configuration
+    html += "<tr><td colspan='4' style='color: red;'>No authorized tokens in range.</td></tr>";
+  }
+  html += "</table>";
 
   // display proxy log
   // Display date
