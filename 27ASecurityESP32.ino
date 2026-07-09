@@ -34,8 +34,8 @@ String IdentifyManufacturer(String macAddress) {
   macAddress.toUpperCase();
 
   // 1. Direct Hardcoded Matches (Must use UPPERCASE letters!)
-if (macAddress == "CC:4F:9D:84:98:96") return "Tony's Keys";
-if (macAddress == "E7:7B:6A:00:9E:FE") return "Tony's Wallet??";
+if (macAddress == "CC:4F:9D:84:98:96") return "Tony's MacBook";
+
 
   // 2. Extract first 3 bytes (the OUI prefix e.g., "00:05:78")
   String prefix = macAddress.substring(0, 8);
@@ -48,9 +48,22 @@ if (macAddress == "E7:7B:6A:00:9E:FE") return "Tony's Wallet??";
     return "LG Smart TV";
   }
 
+    if (prefix == "FC:45:C3" ) {
+    return "Texas Instrument";
+  }
+
+      if (prefix == "D0:EE:DC" ) {
+    return "Intel Corp";
+  }
+
+   if (prefix == "C8:45:6A" ) {
+    return "Custom IoT Node "; // ike Tuya or Espressif
+  }
+
+
   // --- NEW: Samsung Smart TVs ---
   // Covers major Samsung Electronics TV chassis and internal Bluetooth modules
-  if (prefix == "00:00:F0" || prefix == "00:07:AB" || prefix == "00:16:32" || 
+  if (prefix == "00:00:F0" || prefix == "00:07:AB" || prefix == "00:16:32" || prefix == "64:1C:B0" || 
       prefix == "30:62:22" || prefix == "50:CC:F8" || prefix == "64:1B:2F" || 
       prefix == "9C:73:B1" || prefix == "DC:87:F8" || prefix == "E0:03:6B") {
     return "Samsung Smart TV";
@@ -85,13 +98,31 @@ if (macAddress == "E7:7B:6A:00:9E:FE") return "Tony's Wallet??";
     return "Amazon Echo/Device";
   }
 
-  // 3. Fallback Smart Check: Detect Randomized Privacy Addresses
-  // If the second character of the MAC is 2, 6, A, or E, it is a randomized address
+    // Matches Dialog/Renesas BLE chipsets exclusively used by static Tiles
+  if (prefix == "00:25:BF" || prefix == "D8:24:BD" || prefix == "60:C0:BF" || 
+      prefix == "24:4C:E3" || prefix == "D4:C1:FC" || prefix == "80:EA:CA") {
+    return "Tile Tracker (Static)";
+  }
+
+// 3. Fallback Smart Check: Detect Randomized Privacy & Local Mobile Addresses
+  // Extract the second character of the MAC string
   char privateChar = macAddress.charAt(1);
-  if (privateChar == '2' || privateChar == '6' || privateChar == 'A' || privateChar == 'E') {
+  
+  // Checks for BOTH uppercase and lowercase definitions of privacy characters (2, 6, A/a, E/e)
+  // Also added direct flags for common mobile randomizations (b, 9, 5, f)
+  if (privateChar == 'B' || privateChar == 'b' ||
+      privateChar == 'F' || privateChar == 'f' ||
+      privateChar == '9' ) {
     return "Private Smartphone/Tablet";
   }
 
+  if  (privateChar == '2' || privateChar == '6' || privateChar == '5' ||
+      privateChar == 'A' || privateChar == 'a' || 
+      privateChar == 'E' || privateChar == 'e') {
+      return "Locally Administered / Private Randomized";
+      }
+
+  // Final catch-all if it survives all hardcoded vendor rules and privacy checks
   return "Unknown Brand";
 }
 
