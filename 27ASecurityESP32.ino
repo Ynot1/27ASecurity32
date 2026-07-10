@@ -588,6 +588,35 @@ class MyAdvertisedDeviceCallbacks : public BLEAdvertisedDeviceCallbacks {
   }
 };
 
+// Structure for Authorised Tokens
+struct AuthorisedDevice {
+  String macAddress;
+  String deviceType;
+};
+
+#define MAX_AUTH_DEVICES 10
+AuthorisedDevice authDevices[MAX_AUTH_DEVICES];
+int authDeviceCount = 0;
+
+// Adjustable 2FA validation window via web interface (Default: 30 seconds)
+int authTimeWindowSeconds = 30; 
+
+bool isAuthorisedTokenPresent() {
+  unsigned long now = millis();
+  
+  for (int i = 0; i < authDeviceCount; i++) {
+    for (int j = 0; j < deviceCount; j++) {
+      if (discoveredDevices[j].macAddress == authDevices[i].macAddress) {
+        unsigned long timeDelta = (now - discoveredDevices[j].lastSeen) / 1000;
+        if (timeDelta <= (unsigned long)authTimeWindowSeconds) {
+          return true; // Match found! An authorized physical token is actively inside the room.
+        }
+      }
+    }
+  }
+  return false; 
+}
+
 // prototypes
 boolean connectWifi();  // router handed out 192.168.1.169 for this initially
 
@@ -876,6 +905,56 @@ void setup() {
   server.on("/SET", handleSet);
   server.on("/UNSET", handleUnSet);
   server.on("/setRadioParams", handleRadioParams);
+
+// Route to Authorise a device
+  server.on("/authorise", []() {
+    String mac = server.arg("mac");
+    String type = server.arg("type");
+    mac.toUpperCase();
+    
+    // Check if already authorised or if array is full
+    bool exists = false;
+    for(int i=0; i<authDeviceCount; i++) {
+      if(authDevices[i].macAddress == mac) exists = true;
+    }
+    
+    if (!exists && authDeviceCount < MAX_AUTH_DEVICES && mac != "") {
+      authDevices[authDeviceCount].macAddress = mac;
+      authDevices[authDeviceCount].deviceType = type;
+      authDeviceCount++;
+    }
+    // Redirect back to main page immediately
+    server.sendHeader("Location", "/");
+    server.send(303);
+  });
+
+  // Route to Deauthorise a device
+  server.on("/deauthorise", []() {
+    String mac = server.arg("mac");
+    mac.toUpperCase();
+    
+    // Search array and shift items left to remove it cleanly
+    for (int i = 0; i < authDeviceCount; i++) {
+      if (authDevices[i].macAddress == mac) {
+        for (int j = i; j < authDeviceCount - 1; j++) {
+          authDevices[j] = authDevices[j + 1];
+        }
+        authDeviceCount--;
+        break;
+      }
+    }
+    server.sendHeader("Location", "/");
+    server.send(303);
+  });
+
+  // Route to Save the Adjustable Time Window form field
+  server.on("/save-settings", []() {
+    if (server.hasArg("window")) {
+      authTimeWindowSeconds = server.arg("window").toInt();
+    }
+    server.sendHeader("Location", "/");
+    server.send(303);
+  });
 
   server.begin();
 
@@ -1287,7 +1366,7 @@ if (request->hasArg("key")) {
   // Start building your HTML response string
   // --- START OF HTML WEB PAGE ---
   String html = "<!DOCTYPE html><html>";
-
+html += "<meta charset='UTF-8'>"; // 👈 allows  modern 4-byte Unicode characters (like emojis)to render
   html += "<head><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">";
   html += "<link rel=\"icon\" href=\"data:,\">";
 
@@ -1430,7 +1509,8 @@ html += "</div>";
       }
     }
   }
-
+/*
+old active table
   // --- TABLE HEADERS ---
   html += "<h3>Active Bluetooth Tokens (RSSI > " + String(rssiThreshold) + " dBm)</h3>";
   html += "<table border='1' align='center' style='margin-bottom: 20px; width: 95%; max-width: 650px;'>";
@@ -1470,6 +1550,99 @@ html += "</div>";
 
   if (count == 0) {
     html += "<tr><td colspan='5' style='color: red;'>No authorized tokens in range.</td></tr>";
+  }
+  html += "</table>";
+
+  */
+
+  // ======================================================
+  // NEW: SETTINGS CONFIGURATION FORM (Adjustable Time Window)
+  // ======================================================
+  html += "<div style='margin: 20px auto; width: 95%; max-width: 650px; text-align: center; border: 1px dashed #666; padding: 10px;'>";
+  html += "<form action='/save-settings' method='POST'>";
+  html += "<b>2FA Authorisation Window: </b>";
+  html += "<input type='number' name='window' value='" + String(authTimeWindowSeconds) + "' style='width:60px; text-align:center;'> seconds ";
+  html += "<input type='submit' value='Update Window'>";
+  html += "</form></div>";
+
+  // ======================================================
+  // TABLE 1: ACTIVE BLUETOOTH TOKENS (SCANNER)
+  // ======================================================
+  html += "<h3>Active Bluetooth Tokens (RSSI > " + String(rssiThreshold) + " dBm)</h3>";
+  html += "<table border='1' align='center' style='margin-bottom: 30px; width: 95%; max-width: 650px;'>";
+  html += "<tr><th>MAC Address</th><th>Device Info</th><th>RSSI</th><th>Last Seen</th><th>Total Duration</th><th>Action</th></tr>";
+
+  unsigned long currentMillis = millis();
+  int count = 0;
+
+  for (int i = 0; i < deviceCount; i++) {
+    if (currentMillis - discoveredDevices[i].lastSeen < ((unsigned long)presenceWindowSeconds * 1000)) {
+      html += "<tr><td><code>" + discoveredDevices[i].macAddress + "</code></td>";
+      
+      if (discoveredDevices[i].findMyFingerprint != "") {
+        html += "<td><b>" + discoveredDevices[i].deviceType + "</b><br><small style='color:blue;'>Key: " + discoveredDevices[i].findMyFingerprint + "</small></td>";
+      } else {
+        html += "<td>" + discoveredDevices[i].deviceType + "</td>";
+      }
+      
+      html += "<td>" + String(discoveredDevices[i].rssi) + " dBm</td>";
+
+      unsigned long lastSeenSec = (currentMillis - discoveredDevices[i].lastSeen) / 1000;
+      html += "<td>" + String(lastSeenSec) + "s ago</td>";
+
+      unsigned long totalTimeSec = (currentMillis - discoveredDevices[i].firstSeen) / 1000;
+      unsigned long mins = totalTimeSec / 60;
+      unsigned long secs = totalTimeSec % 60;
+      
+      html += "<td>";
+      if (mins > 0) { html += String(mins) + "m "; }
+      html += String(secs) + "s in range</td>";
+
+      // ACTION BUTTON: Link to send device data to the /authorise controller url endpoint
+      html += "<td><a href='/authorise?mac=" + discoveredDevices[i].macAddress + "&type=" + discoveredDevices[i].deviceType + "'><button style='background-color:#4CAF50; color:white; border:none; padding:4px 8px; cursor:pointer;'>+ Authorise</button></a></td></tr>";
+
+      count++;
+    }
+  }
+
+  if (count == 0) {
+    html += "<tr><td colspan='6' style='color: red; text-align:center;'>No tokens in range.</td></tr>";
+  }
+  html += "</table>";
+
+  // ======================================================
+  // NEW: TABLE 2: NOMINATED AUTHORISED TOKENS (SECURITY DATABASE)
+  // ======================================================
+  html += "<hr style='width: 95%; max-width: 650px; margin: 20px auto;'>";
+  html += "<h3>🔒 Authorised 2FA Security Tokens (" + String(authDeviceCount) + "/" + String(MAX_AUTH_DEVICES) + ")</h3>";
+  html += "<table border='1' align='center' style='margin-bottom: 20px; width: 95%; max-width: 650px; background-color: #f9f9f9;'>";
+  html += "<tr style='background-color: #e0e0e0;'><th>MAC Address</th><th>Device Info</th><th>Current Proximity Status</th><th>Action</th></tr>";
+
+  if (authDeviceCount == 0) {
+    html += "<tr><td colspan='4' style='color: gray; text-align:center; padding: 10px;'>No authorised devices defined. Click '+ Authorise' on the table above to add keys.</td></tr>";
+  } else {
+    for (int i = 0; i < authDeviceCount; i++) {
+      html += "<tr><td><code>" + authDevices[i].macAddress + "</code></td>";
+      html += "<td><b>" + authDevices[i].deviceType + "</b></td>";
+      
+      // Calculate Real-Time Proximity Status indicator text
+      String liveStatus = "<span style='color:red;'>🔴 Out of Range / Inactive</span>";
+      for (int j = 0; j < deviceCount; j++) {
+        if (discoveredDevices[j].macAddress == authDevices[i].macAddress) {
+          unsigned long delta = (currentMillis - discoveredDevices[j].lastSeen) / 1000;
+          if (delta <= (unsigned long)authTimeWindowSeconds) {
+            liveStatus = "<span style='color:green;'>🟢 Active Verification Present (" + String(delta) + "s ago)</span>";
+          } else {
+            liveStatus = "<span style='color:orange;'>🟠 Stale (Seen " + String(delta) + "s ago)</span>";
+          }
+          break;
+        }
+      }
+      
+      html += "<td>" + liveStatus + "</td>";
+      // DE-AUTHORISE ACTION BUTTON
+      html += "<td><a href='/deauthorise?mac=" + authDevices[i].macAddress + "'><button style='background-color:#f44336; color:white; border:none; padding:4px 8px; cursor:pointer;'>❌ Revoke</button></a></td></tr>";
+    }
   }
   html += "</table>";
 
