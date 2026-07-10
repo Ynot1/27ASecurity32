@@ -8,9 +8,9 @@
 
 // Bluetooth section
 
-int rssiThreshold = -40;  // Predefined threshold in dBm (closer to 0 is stronger) can be re defined on web page
-int presenceWindowSeconds = 60; // How long to remember a bluetooth device
-int scanSliceDuration = 3;      // Scanning duration slice in seconds
+int rssiThreshold = -90;         // Predefined threshold in dBm (closer to 0 is stronger) can be re defined on web page
+int presenceWindowSeconds = 60;  // How long to remember a bluetooth device
+int scanSliceDuration = 3;       // Scanning duration slice in seconds
 
 #include <BLEDevice.h>
 #include <BLEUtils.h>
@@ -26,10 +26,11 @@ struct TrackedBeacon {
   int rssi;
   unsigned long lastSeen;
   unsigned long firstSeen;
-  String deviceType; // <-- Add this to store the name/manufacturer
+  String deviceType;         // <-- Add this to store the name/manufacturer
+  String findMyFingerprint;  // <- Holds the fixed unique identifier payload
 };
 
-const int MAX_DEVICES = 20;
+const int MAX_DEVICES = 30;
 TrackedBeacon discoveredDevices[MAX_DEVICES];
 int deviceCount = 0;
 
@@ -37,58 +38,53 @@ String IdentifyManufacturer(String macAddress) {
   macAddress.toUpperCase();
 
   // 1. Direct Hardcoded Matches (Must use UPPERCASE letters!)
-if (macAddress == "CC:4F:9D:84:98:96") return "Tony's MacBook";
-
+  if (macAddress == "38:F9:D3:19:96:BA") return "Tony's MacBook";
+  if (macAddress == "84:B1:E4:08:62:AB") return "Tony's IPHONE13";
+ if (macAddress == "10:00:20:72:5B:7A") return "Tony's iPad (3)";
 
   // 2. Extract first 3 bytes (the OUI prefix e.g., "00:05:78")
   String prefix = macAddress.substring(0, 8);
 
   // --- NEW: LG Smart TVs & Appliances ---
   // Covers LG Electronics, LG Innotek, and standard LG network modules
-  if (prefix == "AC:5A:F0" || prefix == "00:05:C9" || prefix == "00:1C:62" || 
-      prefix == "1C:5A:6B" || prefix == "20:28:BC" || prefix == "34:FC:B9" || 
-      prefix == "4C:12:9F" || prefix == "98:D6:BB" || prefix == "A4:08:EA") {
+  if (prefix == "AC:5A:F0" || prefix == "00:05:C9" || prefix == "00:1C:62" || prefix == "1C:5A:6B" || prefix == "20:28:BC" || prefix == "34:FC:B9" || prefix == "4C:12:9F" || prefix == "98:D6:BB" || prefix == "A4:08:EA") {
     return "LG Smart TV";
   }
 
-    if (prefix == "FC:45:C3" ) {
+  if (prefix == "FC:45:C3") {
     return "Texas Instrument";
   }
 
-      if (prefix == "D0:EE:DC" ) {
+  if (prefix == "D0:EE:DC") {
     return "Intel Corp";
   }
 
-  if (prefix == "6C:DE:E9" ) {
+  if (prefix == "6C:DE:E9") {
     return "Intel Corp";
   }
 
-   if (prefix == "C8:45:6A" ) {
-    return "Custom IoT Node "; // like Tuya or Espressif
+  if (prefix == "C8:45:6A") {
+    return "Custom IoT Node ";  // like Tuya or Espressif
   }
 
-if (prefix == "50:9A:63" || prefix == "6C:F3:67") {
-  return "Nokia Hardware";
-}
-if (prefix == "E0:90:2E") {
-  return "Murata IoT Module  (sony PlayStation)";
-}
+  if (prefix == "50:9A:63" || prefix == "6C:F3:67") {
+    return "Nokia Hardware";
+  }
+  if (prefix == "E0:90:2E") {
+    return "Murata IoT Module  (sony PlayStation)";
+  }
   // --- NEW: Samsung Smart TVs ---
   // Covers major Samsung Electronics TV chassis and internal Bluetooth modules
-  if (prefix == "00:00:F0" || prefix == "00:07:AB" || prefix == "00:16:32" || prefix == "64:1C:B0" || 
-      prefix == "30:62:22" || prefix == "50:CC:F8" || prefix == "64:1B:2F" || 
-      prefix == "9C:73:B1" || prefix == "DC:87:F8" || prefix == "E0:03:6B" || prefix == "FC:A6:EE") {
+  if (prefix == "00:00:F0" || prefix == "00:07:AB" || prefix == "00:16:32" || prefix == "64:1C:B0" || prefix == "30:62:22" || prefix == "50:CC:F8" || prefix == "64:1B:2F" || prefix == "9C:73:B1" || prefix == "DC:87:F8" || prefix == "E0:03:6B" || prefix == "FC:A6:EE") {
     return "Samsung Smart TV";
   }
 
   // Apple Ecosystem (Added your MacBook/Mac prefix!)
-  if (prefix == "D8:E3:7C" || prefix == "F0:AA:CF" || prefix == "00:05:78" || prefix == "00:0A:95" || 
-      prefix == "74:52:63" || prefix == "00:10:FA" || prefix == "00:1C:B3" || prefix == "10:DD:B1" || 
-      prefix == "14:10:9F" || prefix == "D0:25:98" || prefix == "E0:C9:7A") {
+  if (prefix == "D8:E3:7C" || prefix == "F0:AA:CF" || prefix == "00:05:78" || prefix == "00:0A:95" || prefix == "74:52:63" || prefix == "00:10:FA" || prefix == "00:1C:B3" || prefix == "10:DD:B1" || prefix == "14:10:9F" || prefix == "D0:25:98" || prefix == "E0:C9:7A") {
     return "Apple Device";
   }
 
-    // Huawei Block Update
+  // Huawei Block Update
   if (prefix == "57:1B:71") {
     return "Huawei Device";
   }
@@ -109,49 +105,43 @@ if (prefix == "E0:90:2E") {
   }
 
   // Samsung Mobile / General (Distinct from targeted TV modules if needed)
-  if (prefix == "BC:D1:D3" || prefix == "00:12:47" || prefix == "38:AA:3C" || 
-      prefix == "A8:7B:39" || prefix == "CC:C7:60") {
+  if (prefix == "BC:D1:D3" || prefix == "00:12:47" || prefix == "38:AA:3C" || prefix == "A8:7B:39" || prefix == "CC:C7:60") {
     return "Samsung Mobile";
   }
 
   // Espressif Systems (Other ESP32 or ESP8266 smart devices in your house)
-  if (prefix == "24:4B:03" || prefix == "30:AE:A4" || prefix == "A4:CF:12" || 
-      prefix == "C8:2B:96" || prefix == "EC:FA:BC") {
+  if (prefix == "24:4B:03" || prefix == "30:AE:A4" || prefix == "A4:CF:12" || prefix == "C8:2B:96" || prefix == "EC:FA:BC") {
     return "Espressif (ESP32/8266)";
   }
 
   // Amazon (Echo dots, Kindles, Fire sticks)
-  if (prefix == "00:BB:3A" || prefix == "50:DC:E7" || prefix == "FC:A1:3E" || prefix == "F4:DD:FA" ) {
+  if (prefix == "00:BB:3A" || prefix == "50:DC:E7" || prefix == "FC:A1:3E" || prefix == "F4:DD:FA") {
     return "Amazon Echo/Device";
   }
 
-    // Matches Dialog/Renesas BLE chipsets exclusively used by static Tiles
-  if (prefix == "00:25:BF" || prefix == "D8:24:BD" || prefix == "60:C0:BF" || 
-      prefix == "24:4C:E3" || prefix == "D4:C1:FC" || prefix == "80:EA:CA") {
+  // Matches Dialog/Renesas BLE chipsets exclusively used by static Tiles
+  if (prefix == "00:25:BF" || prefix == "D8:24:BD" || prefix == "60:C0:BF" || prefix == "24:4C:E3" || prefix == "D4:C1:FC" || prefix == "80:EA:CA") {
     return "Tile Tracker (Static)";
   }
 
-// 3. Fallback Smart Check: Detect Randomized Privacy & Local Mobile Addresses
+  // 3. Fallback Smart Check: Detect Randomized Privacy & Local Mobile Addresses
   // Extract the second character of the MAC string
   char privateChar = macAddress.charAt(1);
-  
+
   // Checks for BOTH uppercase and lowercase definitions of privacy characters (2, 6, A/a, E/e)
   // Also added direct flags for common mobile randomizations (b, 9, 5, f)
-  if (privateChar == 'B' || privateChar == 'b' ||
-      privateChar == 'F' || privateChar == 'f' ||
-      privateChar == '9' ) {
+  if (privateChar == 'B' || privateChar == 'b' || privateChar == 'F' || privateChar == 'f' || privateChar == '9') {
     return "Randomised Private Smartphone/Tablet";
   }
 
- if (privateChar == '2' || privateChar == '3' || privateChar == '6' || privateChar == '5' || privateChar == '7' ||
-    privateChar == 'A' || privateChar == 'a' || 
-    privateChar == 'E' || privateChar == 'e') {
-  return "Locally Administered / Private Randomized";
-}
+  if (privateChar == '2' || privateChar == '3' || privateChar == '6' || privateChar == '5' || privateChar == '7' || privateChar == 'A' || privateChar == 'a' || privateChar == 'E' || privateChar == 'e') {
+    return "Locally Administered / Private Randomized";
+  }
 
   // Final catch-all if it survives all hardcoded vendor rules and privacy checks
   return "Unknown Brand";
 }
+/* prior to changes to add apple Find My devices 
 
 class MyAdvertisedDeviceCallbacks : public BLEAdvertisedDeviceCallbacks {
   void onResult(BLEAdvertisedDevice advertisedDevice) {
@@ -204,6 +194,399 @@ String manufacturer = IdentifyManufacturer(currentMac);
   }
 };
 
+*/
+
+/*
+
+class MyAdvertisedDeviceCallbacks : public BLEAdvertisedDeviceCallbacks {
+  void onResult(BLEAdvertisedDevice advertisedDevice) {
+    int currentRssi = advertisedDevice.getRSSI();
+    
+    // 1. Immediately drop devices below your custom live web slider threshold
+    if (currentRssi < rssiThreshold) {
+      return;
+    }
+
+    String currentMac = advertisedDevice.getAddress().toString().c_str();
+    currentMac.toUpperCase();
+    
+    String manufacturer = "Unknown Brand";
+    String payloadSignature = ""; // Holds the permanent fingerprint if it's a dynamic Apple tag
+
+    // 2. CHECK FOR TILE SERVICE PAYLOAD OVERRIDES (0xFEED / 0xFEEC)
+    if (advertisedDevice.haveServiceUUID()) {
+      String serviceUUID = advertisedDevice.getServiceUUID().toString().c_str();
+      if (serviceUUID.indexOf("feed") != -1 || serviceUUID.indexOf("feec") != -1) {
+        manufacturer = "Tile Tracker";
+         Serial.println("Tile Tracker found");
+      }
+    }
+
+    // 3. CHECK FOR APPLE FIND MY PAYLOADS (Company ID: 0x004C)
+    if (manufacturer == "Unknown Brand" && advertisedDevice.haveManufacturerData()) {
+      // FIX: Changed from std::string to Arduino String to match library return type
+      String rawData = advertisedDevice.getManufacturerData().c_str(); 
+      
+      if (rawData.length() >= 7 && (uint8_t)rawData[0] == 0x4C && (uint8_t)rawData[1] == 0x00) {
+        manufacturer = "Apple Find My Tracker";
+         Serial.println("Apple Found my Tracker found");
+        
+        // Extract 6 bytes starting at index 4 as a permanent software tracking fingerprint
+        char buff[13];
+        snprintf(buff, sizeof(buff), "%02X%02X%02X%02X%02X%02X", 
+                 (uint8_t)rawData[4], (uint8_t)rawData[5], (uint8_t)rawData[6], 
+                 (uint8_t)rawData[7], (uint8_t)rawData[8], (uint8_t)rawData[9]);
+        payloadSignature = String(buff);
+      }
+    }
+
+    // 4. CENTRALIZED FALLBACK: Run your regular OUI vendor prefix check if it's a standard MAC
+    if (manufacturer == "Unknown Brand") {
+      manufacturer = IdentifyManufacturer(currentMac);
+    }
+
+    // 5. FUTURE ASSIGNMENT PLACEHOLDER: 
+    // Once you read the blue key text codes off your web dashboard, paste them here!
+    // if (payloadSignature == "A1B2C3D4E5F6") manufacturer = "Tony's Keys (FindMy)";
+    // if (payloadSignature == "F6E5D4C3B2A1") manufacturer = "Tony's Wallet (FindMy)";
+
+    unsigned long now = millis();
+    bool found = false;
+    
+    // 6. LOOP TRACKING STORAGE MATCH MATCH ENGINE (MAX_DEVICES = 30)
+    for (int i = 0; i < deviceCount; i++) {
+      // Clean cross-match: Match by signature for Find My tags, match by MAC for static gear
+      if ((payloadSignature != "" && discoveredDevices[i].findMyFingerprint == payloadSignature) || 
+          (payloadSignature == "" && discoveredDevices[i].macAddress == currentMac)) {
+        
+        // Reset arrival window timer if device has been gone for over 30 seconds
+        if (now - discoveredDevices[i].lastSeen > 30000) {
+          discoveredDevices[i].firstSeen = now;
+        }
+
+        // Keep updating fields (updates shifting temporary MACs dynamically)
+        discoveredDevices[i].macAddress = currentMac; 
+        discoveredDevices[i].rssi = currentRssi;
+        discoveredDevices[i].lastSeen = now;
+        discoveredDevices[i].deviceType = manufacturer; 
+        found = true;
+        break;
+      }
+    }
+
+    // 7. SLOT RESERVATION FOR NEW INCOMING DEVICE IDENTITIES
+    if (!found && deviceCount < MAX_DEVICES) {
+      discoveredDevices[deviceCount].macAddress = currentMac;
+      discoveredDevices[deviceCount].rssi = currentRssi;
+      discoveredDevices[deviceCount].lastSeen = now;
+      discoveredDevices[deviceCount].firstSeen = now;
+      discoveredDevices[deviceCount].deviceType = manufacturer;
+      discoveredDevices[deviceCount].findMyFingerprint = payloadSignature; // Commit key fingerprint
+      deviceCount++;
+    }
+  }
+};
+
+*/
+
+/* 
+this still doesnt work, no apple find my stuff to be seen
+
+a new thread AI (the old one crashed) says 
+he reason your code is completely missing the nearby Apple Find My devices comes down to a critical memory vulnerability introduced in your fix: the C-string null-byte truncation bug.
+When you modified the code to use .c_str(), you inadvertently caused the ESP32 to drop the payload. 
+Apple Find My payload packets use standard raw binary data. The very second byte of an Apple manufacturer beacon is 0x00 (from Apple's registered ID: 0x4C, 0x00). In C/C++, a 0x00 byte is interpreted as a null-terminator character, which signals the end of a text string. As a result, when you called .c_str(), your data length immediately truncated to exactly 1 byte long (0x4C), failing your code's check if (rawBytes.length() >= 7).
+
+class MyAdvertisedDeviceCallbacks : public BLEAdvertisedDeviceCallbacks {
+  void onResult(BLEAdvertisedDevice advertisedDevice) {
+    int currentRssi = advertisedDevice.getRSSI();
+    if (currentRssi < rssiThreshold) return;
+
+    String currentMac = advertisedDevice.getAddress().toString().c_str();
+    currentMac.toUpperCase();
+    
+    String manufacturer = "Unknown Brand";
+    String payloadSignature = ""; 
+
+    // 1. CHECK FOR TILE SERVICE PAYLOAD OVERRIDES (0xFEED / 0xFEEC)
+    if (advertisedDevice.haveServiceUUID()) {
+      String serviceUUID = advertisedDevice.getServiceUUID().toString().c_str();
+      if (serviceUUID.indexOf("feed") != -1 || serviceUUID.indexOf("feec") != -1) {
+        manufacturer = "Tile Tracker";
+      }
+    }
+
+    // 2. FIXED: ROBUST RAW BYTE MEMORY INSPECTION FOR APPLE FIND MY TAGS
+    if (manufacturer == "Unknown Brand" && advertisedDevice.haveManufacturerData()) {
+     // std::string rawBytes = advertisedDevice.getManufacturerData();
+     std::string rawBytes = advertisedDevice.getManufacturerData().c_str();
+      
+      // Access the raw C-string data pointer safely to bypass typecast quirks
+      if (rawBytes.length() >= 7) {
+        uint8_t* pData = (uint8_t*)rawBytes.data();
+        
+        // Match Apple's specific Company Identifier (0x4C, 0x00)
+        if (pData[0] == 0x4C && pData[1] == 0x00) {
+          manufacturer = "Apple Find My Tracker";
+          
+          // Build the unique 6-byte software signature fingerprint from the beacon data
+          char buff[13];
+          snprintf(buff, sizeof(buff), "%02X%02X%02X%02X%02X%02X", 
+                   pData[4], pData[5], pData[6], pData[7], pData[8], pData[9]);
+          payloadSignature = String(buff);
+        }
+      }
+    }
+
+    // 3. Fallback to standard MAC lookup if no special payloads were triggered
+    if (manufacturer == "Unknown Brand") {
+      manufacturer = IdentifyManufacturer(currentMac);
+    }
+
+      // 4. CENTRALIZED FALLBACK: Run your regular OUI vendor prefix check if it's a standard MAC
+    if (manufacturer == "Unknown Brand") {
+      manufacturer = IdentifyManufacturer(currentMac);
+    }
+
+    unsigned long now = millis();
+    bool found = false;
+    
+    // 5. MASTER TRACKING MEMORY ARRAY MATCH ENGINE
+    for (int i = 0; i < deviceCount; i++) {
+      if ((payloadSignature != "" && discoveredDevices[i].findMyFingerprint == payloadSignature) || 
+          (payloadSignature == "" && discoveredDevices[i].macAddress == currentMac)) {
+        
+        if (now - discoveredDevices[i].lastSeen > 30000) {
+          discoveredDevices[i].firstSeen = now;
+        }
+
+        discoveredDevices[i].macAddress = currentMac; 
+        discoveredDevices[i].rssi = currentRssi;
+        discoveredDevices[i].lastSeen = now;
+        discoveredDevices[i].deviceType = manufacturer; 
+        found = true;
+        break;
+      }
+    }
+
+    // 6. STORAGE RESERVATION FOR UNLINKED DEVICE SIGNATURES
+    if (!found && deviceCount < MAX_DEVICES) {
+      discoveredDevices[deviceCount].macAddress = currentMac;
+      discoveredDevices[deviceCount].rssi = currentRssi;
+      discoveredDevices[deviceCount].lastSeen = now;
+      discoveredDevices[deviceCount].firstSeen = now;
+      discoveredDevices[deviceCount].deviceType = manufacturer;
+      discoveredDevices[deviceCount].findMyFingerprint = payloadSignature; 
+      deviceCount++;
+    }
+  }
+};
+
+*/
+
+/* fixing order of checking devices 
+class MyAdvertisedDeviceCallbacks : public BLEAdvertisedDeviceCallbacks {
+  void onResult(BLEAdvertisedDevice advertisedDevice) {
+    int currentRssi = advertisedDevice.getRSSI();
+    if (currentRssi < rssiThreshold) return;
+
+    String currentMac = advertisedDevice.getAddress().toString().c_str();
+    currentMac.toUpperCase();
+    
+    String manufacturer = "Unknown Brand";
+    String payloadSignature = ""; 
+
+    // 1. CHECK FOR TILE SERVICE PAYLOAD OVERRIDES (0xFEED / 0xFEEC)
+    if (advertisedDevice.haveServiceUUID()) {
+      String serviceUUID = advertisedDevice.getServiceUUID().toString().c_str();
+      if (serviceUUID.indexOf("feed") != -1 || serviceUUID.indexOf("feec") != -1) {
+        manufacturer = "Tile Tracker";
+      }
+    }
+****
+This version of the class assumed anything Apple is a find my tracker , it showed 10 of them!
+
+    // 2. FIXED: PARSE MANUFACTURE DATA AS RAW BINARY TO PREVENT NULL-TERMINATOR TRUNCATION
+    if (manufacturer == "Unknown Brand" && advertisedDevice.haveManufacturerData()) {
+      // Fetch as native Arduino String but extract underlying byte length safely
+      String mfgDataStr = advertisedDevice.getManufacturerData();
+      int dataLength = mfgDataStr.length();
+      
+      // Ensure we have enough data bytes to check (Apple headers need at least 7+ bytes)
+      if (dataLength >= 7) {
+        const uint8_t* pData = (const uint8_t*)mfgDataStr.c_str();
+        
+        // Match Apple's specific Company Identifier (0x4C, 0x00)
+        // Note: Even if c_str() hits a null-terminator, the array buffer itself still holds the bytes!
+        if (pData[0] == 0x4C && pData[1] == 0x00) {
+          manufacturer = "Apple Find My Tracker";
+          
+          // Build the unique 6-byte software signature fingerprint from the beacon data
+          char buff[13];
+          snprintf(buff, sizeof(buff), "%02X%02X%02X%02X%02X%02X", 
+                   pData[4], pData[5], pData[6], pData[7], pData[8], pData[9]);
+          payloadSignature = String(buff);
+        }
+      }
+    }
+****
+
+// 2. FIXED: STRICT VALIDATION FOR ACTUAL APPLE FIND MY BEACONS ONLY
+    if (manufacturer == "Unknown Brand" && advertisedDevice.haveManufacturerData()) {
+      String mfgDataStr = advertisedDevice.getManufacturerData();
+      int dataLength = mfgDataStr.length();
+      
+      if (dataLength >= 7) {
+        const uint8_t* pData = (const uint8_t*)mfgDataStr.c_str();
+        
+        // 1. Must be Apple (0x4C, 0x00)
+        // 2. Must match Find My Beacon Subtype (0x12)
+        // 3. Must match the exact standard tracking payload length (0x19)
+        if (pData[0] == 0x4C && pData[1] == 0x00 && pData[2] == 0x12 && pData[3] == 0x19) {
+          manufacturer = "Apple Find My Tracker";
+          
+          // The actual unique public key fingerprint starts at byte index 6
+          char buff[13];
+          snprintf(buff, sizeof(buff), "%02X%02X%02X%02X%02X%02X", 
+                   pData[6], pData[7], pData[8], pData[9], pData[10], pData[11]);
+          payloadSignature = String(buff);
+        }
+      }
+    }
+
+    // 3. Fallback to standard MAC lookup if no special payloads were triggered
+    if (manufacturer == "Unknown Brand") {
+      manufacturer = IdentifyManufacturer(currentMac);
+    }
+
+    unsigned long now = millis();
+    bool found = false;
+    
+    // 4. MASTER TRACKING MEMORY ARRAY MATCH ENGINE
+    for (int i = 0; i < deviceCount; i++) {
+      if ((payloadSignature != "" && discoveredDevices[i].findMyFingerprint == payloadSignature) || 
+          (payloadSignature == "" && discoveredDevices[i].macAddress == currentMac)) {
+        
+        if (now - discoveredDevices[i].lastSeen > 30000) {
+          discoveredDevices[i].firstSeen = now;
+        }
+
+        discoveredDevices[i].macAddress = currentMac; 
+        discoveredDevices[i].rssi = currentRssi;
+        discoveredDevices[i].lastSeen = now;
+        discoveredDevices[i].deviceType = manufacturer; 
+        found = true;
+        break;
+      }
+    }
+
+    // 5. STORAGE RESERVATION FOR UNLINKED DEVICE SIGNATURES
+    if (!found && deviceCount < MAX_DEVICES) {
+      discoveredDevices[deviceCount].macAddress = currentMac;
+      discoveredDevices[deviceCount].rssi = currentRssi;
+      discoveredDevices[deviceCount].lastSeen = now;
+      discoveredDevices[deviceCount].firstSeen = now;
+      discoveredDevices[deviceCount].deviceType = manufacturer;
+      discoveredDevices[deviceCount].findMyFingerprint = payloadSignature; 
+      deviceCount++;
+    }
+  }
+};
+*/
+
+class MyAdvertisedDeviceCallbacks : public BLEAdvertisedDeviceCallbacks {
+  void onResult(BLEAdvertisedDevice advertisedDevice) {
+    int currentRssi = advertisedDevice.getRSSI();
+    if (currentRssi < rssiThreshold) return;
+
+    String currentMac = advertisedDevice.getAddress().toString().c_str();
+    currentMac.toUpperCase();
+
+    String manufacturer = "Unknown Brand";
+    String payloadSignature = "";
+
+    // ==========================================
+    // 1. TOP PRIORITY: STATIC HARDCODED OVERRIDES
+    // ==========================================
+    if (currentMac == "38:F9:D3:19:96:BA") {
+      manufacturer = "Tony's MacBook";
+    }
+
+    // ==========================================
+    // 2. CHECK FOR REAL TILE SERVICE PAYLOADS (Only if still unknown)
+    // ==========================================
+    if (manufacturer == "Unknown Brand" && advertisedDevice.haveServiceUUID()) {
+      String serviceUUID = advertisedDevice.getServiceUUID().toString().c_str();
+      if (serviceUUID.indexOf("feed") != -1 || serviceUUID.indexOf("feec") != -1) {
+        manufacturer = "Tile Tracker";
+      }
+    }
+
+    // ==========================================
+    // 3. STRICT VALIDATION FOR ACTUAL APPLE FIND MY BEACONS ONLY
+    // ==========================================
+    if (manufacturer == "Unknown Brand" && advertisedDevice.haveManufacturerData()) {
+      String mfgDataStr = advertisedDevice.getManufacturerData();
+      int dataLength = mfgDataStr.length();
+
+      if (dataLength >= 7) {
+        const uint8_t* pData = (const uint8_t*)mfgDataStr.c_str();
+
+        // Byte 0-1: Apple (0x4C, 0x00)
+        // Byte 2: Find My Subtype (0x12)
+        // Byte 3: Exact Tracking Payload Length (0x19)
+        if (pData[0] == 0x4C && pData[1] == 0x00 && pData[2] == 0x12 && pData[3] == 0x19) {
+          manufacturer = "Apple Find My Tracker";
+
+          // Fingerprint generation
+          char buff[13];
+          snprintf(buff, sizeof(buff), "%02X%02X%02X%02X%02X%02X",
+                   pData[6], pData[7], pData[8], pData[9], pData[10], pData[11]);
+          payloadSignature = String(buff);
+        }
+      }
+    }
+
+    // ==========================================
+    // 4. FALLBACK: Run standard OUI vendor lookup
+    // ==========================================
+    if (manufacturer == "Unknown Brand") {
+      manufacturer = IdentifyManufacturer(currentMac);
+    }
+
+    // ==========================================
+    // 5. MASTER TRACKING MEMORY ENGINE
+    // ==========================================
+    unsigned long now = millis();
+    bool found = false;
+
+    for (int i = 0; i < deviceCount; i++) {
+      if ((payloadSignature != "" && discoveredDevices[i].findMyFingerprint == payloadSignature) || (payloadSignature == "" && discoveredDevices[i].macAddress == currentMac)) {
+
+        if (now - discoveredDevices[i].lastSeen > 30000) {
+          discoveredDevices[i].firstSeen = now;
+        }
+
+        discoveredDevices[i].macAddress = currentMac;
+        discoveredDevices[i].rssi = currentRssi;
+        discoveredDevices[i].lastSeen = now;
+        discoveredDevices[i].deviceType = manufacturer;
+        found = true;
+        break;
+      }
+    }
+
+    if (!found && deviceCount < MAX_DEVICES) {
+      discoveredDevices[deviceCount].macAddress = currentMac;
+      discoveredDevices[deviceCount].rssi = currentRssi;
+      discoveredDevices[deviceCount].lastSeen = now;
+      discoveredDevices[deviceCount].firstSeen = now;
+      discoveredDevices[deviceCount].deviceType = manufacturer;
+      discoveredDevices[deviceCount].findMyFingerprint = payloadSignature;
+      deviceCount++;
+    }
+  }
+};
 
 // prototypes
 boolean connectWifi();  // router handed out 192.168.1.169 for this initially
@@ -492,7 +875,7 @@ void setup() {
   server.on("/L", handleLedOff);
   server.on("/SET", handleSet);
   server.on("/UNSET", handleUnSet);
-  server.on("/setRadioParams", handleRadioParams); 
+  server.on("/setRadioParams", handleRadioParams);
 
   server.begin();
 
@@ -651,7 +1034,7 @@ void loop() {
 
   server.handleClient();  // Processes web requests in milliseconds
 
-/*
+  /*
 // --- HIGH-RELIABILITY NON-BLOCKING SNAPSHOT ENGINE ---
   static unsigned long lastBleCycle = 0;
   static bool scanTriggered = false;
@@ -717,6 +1100,8 @@ void loop() {
     lastBleCycle = currentMillis;
   }
 */
+
+  /*
 
 // --- DYNAMIC SLIDER-CONTROLLED BACKGROUND ENGINE ---
   static unsigned long lastBleCycle = 0;
@@ -787,6 +1172,93 @@ void loop() {
     lastBleCycle = currentMillis;
   }
 
+*/
+
+  // --- DYNAMIC SLIDER-CONTROLLED BACKGROUND ENGINE WITH LIVE CLEANUP ---
+  static unsigned long lastBleCycle = 0;
+  static bool scanTriggered = false;
+  unsigned long currentMillis = millis();
+
+  // Calculate timing intervals dynamically based on your web slider choice
+  unsigned long scanMs = (unsigned long)scanSliceDuration * 1000;
+  unsigned long totalCycleMs = scanMs * 2;
+
+  // Step A: Kick off a fresh background scan based on your slider length
+  if (currentMillis - lastBleCycle > scanMs && !scanTriggered) {
+    pBLEScan->clearResults();  // Reset hardware cache
+
+    // Scan asynchronously for the duration chosen on the web page slider
+    pBLEScan->start(scanSliceDuration, nullptr, false);
+    scanTriggered = true;
+  }
+
+  // Step B: Dynamic Printing, Maintenance & Storage Cleanup Boundary
+  if (currentMillis - lastBleCycle > totalCycleMs) {
+    scanTriggered = false;  // Release trigger for the next round
+
+    // ... Keep your existing Serial reporting table lines here exactly as they are ...
+
+    Serial.println("\n--- Active BLE Tokens In Range ---");
+    int activeCount = 0;
+
+    for (int i = 0; i < deviceCount; i++) {
+      // Check if the token was detected within a safe 60-second window
+      if (currentMillis - discoveredDevices[i].lastSeen < 60000) {
+        Serial.print("MAC: ");
+        Serial.print(discoveredDevices[i].macAddress);
+        Serial.print(" [");
+        Serial.print(discoveredDevices[i].deviceType);
+        Serial.print("] | RSSI: ");
+        Serial.print(discoveredDevices[i].rssi);
+        Serial.print(" dBm | ");
+
+        // Calculate Last Seen timing
+        unsigned long lastSeenSec = (currentMillis - discoveredDevices[i].lastSeen) / 1000;
+        Serial.print("Last seen: ");
+        Serial.print(lastSeenSec);
+        Serial.print("s ago | ");
+
+        // NEW: Uncapped Exact Duration tracking (Minutes and Seconds breakdown)
+        unsigned long totalTimeSec = (currentMillis - discoveredDevices[i].firstSeen) / 1000;
+        unsigned long mins = totalTimeSec / 60;
+        unsigned long secs = totalTimeSec % 60;
+
+        Serial.print("Duration: ");
+        if (mins > 0) {
+          Serial.print(mins);
+          Serial.print("m ");
+        }
+        Serial.print(secs);
+        Serial.println("s in range");
+
+        activeCount++;
+      }
+    }
+
+    if (activeCount == 0) {
+      Serial.println("No active beacons nearby.");
+    }
+    Serial.println("----------------------------------");
+
+
+    // --- NEW: AUTOMATED ACTIVE BUFFER MANAGEMENT ---
+    // Cleans out expired slots dynamically to keep your 20-device space open
+    unsigned long maxAllowedAgeMs = (unsigned long)presenceWindowSeconds * 1000;
+
+    for (int i = deviceCount - 1; i >= 0; i--) {
+      unsigned long elementAgeMs = currentMillis - discoveredDevices[i].lastSeen;
+
+      if (elementAgeMs >= maxAllowedAgeMs) {
+        // Shift remaining array slots left to overwrite the expired device entry
+        for (int j = i; j < deviceCount - 1; j++) {
+          discoveredDevices[j] = discoveredDevices[j + 1];
+        }
+        deviceCount--;  // Free up a slot for the next scan cycle
+      }
+    }
+
+    lastBleCycle = currentMillis;
+  }
 
 }  // end Void Loop
 
@@ -795,16 +1267,16 @@ void handleRoot() {
 
   Serial.println("New Client in handleRoot.");  // print a message out in the serial port
 
-  
+
 
 
   //Serial.print("Incoming Request URI: ");
-//Serial.println(request->url());  Compilation error: 'request' was not declared in this scope
+  //Serial.println(request->url());  Compilation error: 'request' was not declared in this scope
 
-//Serial.print("Host Header Data: ");
-//Serial.println(request->hostHeader());
+  //Serial.print("Host Header Data: ");
+  //Serial.println(request->hostHeader());
 
-/* Serial.print("Checking 'key' argument: ");
+  /* Serial.print("Checking 'key' argument: ");
 if (request->hasArg("key")) {
   Serial.println(request->arg("key"));
 } else {
@@ -831,6 +1303,15 @@ if (request->hasArg("key")) {
   // Web Page Heading
   html += "<body><h1>27A Security Interface Log</h1>";
 
+  // Display date
+  html += "<p>Current Date is " + String(currentday) + " / " + String(currentmonth) + "</p>";
+
+  // Display current time of day
+  html += "<p>Current Time is " + String(currenthours) + ":" + String(currentminutes) + ":" + String(currentseconds) + ":" + "</p>";
+
+  // Display last Reboot Time
+  html += "<p>Last Restart was " + LastRebootTime + " on " + LastRebootDate + " which was " + String(UpTimeDays) + " days ago" + "</p>";
+
   // Display current state, and show ON/OFF buttons
   html += "<p>LED Status: <strong>" + ledState + "</strong></p>";
   if (ledState == "OFF") {
@@ -850,7 +1331,7 @@ if (request->hasArg("key")) {
     html += "<p>Alarm Panel Status: <strong> SET (enabled/on) </strong></p>";
     html += "<p><a href=\"UNSET\"><button class=\"button button2\">UnSET Alarm</button></a></p>";
   }
-/* old (big form)
+  /* old (big form)
 // --- ADD RSSI THRESHOLD CONTROLLER FORM ---
 html += "<div style='text-align: center; margin: 20px auto; padding: 15px; width: 80%; max-width: 500px; border: 1px solid #ccc; border-radius: 8px;'>";
 html += "<h4>Adjust Filter Sensitivity</h4>";
@@ -863,33 +1344,34 @@ html += "</form>";
 html += "</div>";
 */
 
-// --- STREAMLINED FILTER CONTROLLER BOX ---
+  // --- STREAMLINED FILTER CONTROLLER BOX ---
   html += "<div style='text-align: center; margin: 10px auto; padding: 10px; width: 90%; max-width: 380px; border: 1px solid #bbb; border-radius: 6px; font-size: 0.9em; background-color: #f9f9f9;'>";
   html += "  <h5 style='margin: 0 0 8px 0;'>Radio & Filter Tweaks</h5>";
   html += "  <form action='/setRadioParams' method='GET'>";
-  
+
   // Slider 1: RSSI Sensitivity
   html += "    <div style='margin-bottom: 6px;'>";
-  html += "      <label style='display:block; margin-bottom:2px;'>Gate: <b>" + String(rssiThreshold) + " dBm</b></label>";
+  html += "      <label style='display:block; margin-bottom:2px;'>RSSI Gate: <b>" + String(rssiThreshold) + " dBm</b></label>";
   html += "      <input type='range' name='rssi' min='-100' max='-10' step='1' value='" + String(rssiThreshold) + "' style='width: 85; height: 4px;'>";
   html += "    </div>";
-  
+
   // Slider 2: Detection Window Timeout
   html += "    <div style='margin-bottom: 6px;'>";
   html += "      <label style='display:block; margin-bottom:2px;'>Keep-Alive Window: <b>" + String(presenceWindowSeconds) + "s</b></label>";
   html += "      <input type='range' name='window' min='10' max='300' step='5' value='" + String(presenceWindowSeconds) + "' style='width: 85%; height: 4px;'>";
   html += "    </div>";
-  
+
   // Slider 3: NEW Scan Slice Duration
   html += "    <div style='margin-bottom: 10px;'>";
   html += "      <label style='display:block; margin-bottom:2px;'>Scan Slice: <b>" + String(scanSliceDuration) + "s</b></label>";
   html += "      <input type='range' name='scantime' min='1' max='10' step='1' value='" + String(scanSliceDuration) + "' style='width: 85%; height: 4px;'>";
   html += "    </div>";
-  
+
   html += "    <input type='submit' class='buttonsmall' style='padding: 4px 10px; font-size: 0.85em;' value='Apply Changes'>";
   html += "  </form>";
   html += "</div>";
 
+  /*
 
 // --- TABLE HEADERS ---
   html += "<h3>Active Bluetooth Tokens (RSSI > " + String(rssiThreshold) + " dBm)</h3>";
@@ -899,26 +1381,29 @@ html += "</div>";
  unsigned long currentMillis = millis();
   int count = 0;
 
-  // --- ROW INJECTION LOOP ---
+// --- ROW INJECTION LOOP WITH FIND MY FINGERPRINT DISPLAY ---
   for (int i = 0; i < deviceCount; i++) {
-    if (currentMillis - discoveredDevices[i].lastSeen < 60000) {
-      html += "<tr><td>" + discoveredDevices[i].macAddress + "</td>";
-      html += "<td>" + discoveredDevices[i].deviceType + "</td>";
+    if (currentMillis - discoveredDevices[i].lastSeen < ((unsigned long)presenceWindowSeconds * 1000)) {
+      html += "<tr><td><code>" + discoveredDevices[i].macAddress + "</code></td>";
+      
+      // NEW: If it's a Find My tag, print its type AND its permanent blue tracking key right below it
+      if (discoveredDevices[i].findMyFingerprint != "") {
+        html += "<td><b>" + discoveredDevices[i].deviceType + "</b><br><small style='color:blue;'>Key: " + discoveredDevices[i].findMyFingerprint + "</small></td>";
+      } else {
+        html += "<td>" + discoveredDevices[i].deviceType + "</td>";
+      }
+      
       html += "<td>" + String(discoveredDevices[i].rssi) + " dBm</td>";
 
-      // Inject Last Seen column data
       unsigned long lastSeenSec = (currentMillis - discoveredDevices[i].lastSeen) / 1000;
       html += "<td>" + String(lastSeenSec) + "s ago</td>";
 
-      // NEW: Uncapped Exact Duration tracking for the web page
       unsigned long totalTimeSec = (currentMillis - discoveredDevices[i].firstSeen) / 1000;
       unsigned long mins = totalTimeSec / 60;
       unsigned long secs = totalTimeSec % 60;
       
       html += "<td>";
-      if (mins > 0) {
-        html += String(mins) + "m ";
-      }
+      if (mins > 0) { html += String(mins) + "m "; }
       html += String(secs) + "s in range</td></tr>";
 
       count++;
@@ -930,15 +1415,63 @@ html += "</div>";
   }
   html += "</table>";
 
-  // Display date
-  html += "<p>Current Date is " + String(currentday) + " / " + String(currentmonth) + "</p>";
+*/
 
+  // ==========================================
+  //  SORT DEVICES BY RSSI (Strongest First)
+  // ==========================================
+  for (int i = 0; i < deviceCount - 1; i++) {
+    for (int j = 0; j < deviceCount - i - 1; j++) {
+      // If the next device has a stronger/higher RSSI, swap them
+      if (discoveredDevices[j].rssi < discoveredDevices[j + 1].rssi) {
+        auto temp = discoveredDevices[j];
+        discoveredDevices[j] = discoveredDevices[j + 1];
+        discoveredDevices[j + 1] = temp;
+      }
+    }
+  }
 
-  // Display current time of day
-  html += "<p>Current Time is " + String(currenthours) + ":" + String(currentminutes) + ":" + String(currentseconds) + ":" + "</p>";
+  // --- TABLE HEADERS ---
+  html += "<h3>Active Bluetooth Tokens (RSSI > " + String(rssiThreshold) + " dBm)</h3>";
+  html += "<table border='1' align='center' style='margin-bottom: 20px; width: 95%; max-width: 650px;'>";
+  html += "<tr><th>MAC Address</th><th>Device Info</th><th>RSSI</th><th>Last Seen</th><th>Total Duration</th></tr>";
 
-  // Display last Reboot Time
-  html += "<p>Last Restart was " + LastRebootTime + " on " + LastRebootDate + " which was " + String(UpTimeDays) + " days ago" + "</p>";
+  unsigned long currentMillis = millis();
+  int count = 0;
+
+  // --- ROW INJECTION LOOP WITH FIND MY FINGERPRINT DISPLAY ---
+  for (int i = 0; i < deviceCount; i++) {
+    if (currentMillis - discoveredDevices[i].lastSeen < ((unsigned long)presenceWindowSeconds * 1000)) {
+      html += "<tr><td><code>" + discoveredDevices[i].macAddress + "</code></td>";
+
+      // NEW: If it's a Find My tag, print its type AND its permanent blue tracking key right below it
+      if (discoveredDevices[i].findMyFingerprint != "") {
+        html += "<td><b>" + discoveredDevices[i].deviceType + "</b><br><small style='color:blue;'>Key: " + discoveredDevices[i].findMyFingerprint + "</small></td>";
+      } else {
+        html += "<td>" + discoveredDevices[i].deviceType + "</td>";
+      }
+
+      html += "<td>" + String(discoveredDevices[i].rssi) + " dBm</td>";
+
+      unsigned long lastSeenSec = (currentMillis - discoveredDevices[i].lastSeen) / 1000;
+      html += "<td>" + String(lastSeenSec) + "s ago</td>";
+
+      unsigned long totalTimeSec = (currentMillis - discoveredDevices[i].firstSeen) / 1000;
+      unsigned long mins = totalTimeSec / 60;
+      unsigned long secs = totalTimeSec % 60;
+
+      html += "<td>";
+      if (mins > 0) { html += String(mins) + "m "; }
+      html += String(secs) + "s in range</td></tr>";
+
+      count++;
+    }
+  }
+
+  if (count == 0) {
+    html += "<tr><td colspan='5' style='color: red;'>No authorized tokens in range.</td></tr>";
+  }
+  html += "</table>";
 
   //Serial.println("about to write headers .");
   // 1. Explicitly display the table headers from your dedicated slots (60, 61, 62)
@@ -1408,8 +1941,8 @@ void handleRTCReSync() {
 
   SetTime();
 
-    // Send an HTTP Redirect (303) back to the main page immediately
-    server.sendHeader("Location", "/");
+  // Send an HTTP Redirect (303) back to the main page immediately
+  server.sendHeader("Location", "/");
   server.send(303, "text/plain", "Redirecting...");
 }
 
@@ -1507,9 +2040,9 @@ void handleSetRSSI() {
 */
 
 void handleRadioParams() {
-  if (server.hasArg("rssi"))      rssiThreshold = server.arg("rssi").toInt();
-  if (server.hasArg("window"))    presenceWindowSeconds = server.arg("window").toInt();
-  if (server.hasArg("scantime"))  scanSliceDuration = server.arg("scantime").toInt(); // Parse new slider
+  if (server.hasArg("rssi")) rssiThreshold = server.arg("rssi").toInt();
+  if (server.hasArg("window")) presenceWindowSeconds = server.arg("window").toInt();
+  if (server.hasArg("scantime")) scanSliceDuration = server.arg("scantime").toInt();  // Parse new slider
 
   Serial.print("Parameters Updated -> Gate: ");
   Serial.print(rssiThreshold);
