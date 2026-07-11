@@ -6,6 +6,8 @@
 #include "UpnpBroadcastResponder.h"
 #include "CallbackFunction.h"
 #include <ESPping.h>
+#include <Preferences.h>
+Preferences prefs; // Instantiate the permanent storage core instance
 
 // Bluetooth section
 
@@ -52,6 +54,18 @@ struct AuthorisedIP {
   bool hasTrippedGate = false;  // 👈 NEW: Latches the trigger state
 };
 
+#define MAX_AUTH_IPS 10
+AuthorisedIP authIPs[MAX_AUTH_IPS];
+int authIPCount = 0;
+
+// --- MASTER VOICE-GATE AUTHORISATION FLAGS ---
+bool securitySystemDisableAuthorised = false;  // The master boolean flag for your Alexa gate
+String authorisingDeviceNames = "";            // Holds concatenated names (e.g., "Tony's Phone + Keys")
+unsigned long gateActivationTime = 0;          // Tracks exactly when the fresh arrival triggered
+
+// User-adjustable time window that the gate stays OPEN (Default: 60 seconds)
+int voiceGateOpenDurationSeconds = 60;
+
 #define MAX_AUTH_DEVICES 10
 AuthorisedDevice authDevices[MAX_AUTH_DEVICES];
 int authDeviceCount = 0;
@@ -59,6 +73,15 @@ int authDeviceCount = 0;
 const int MAX_DEVICES = 30;
 TrackedBeacon discoveredDevices[MAX_DEVICES];
 int deviceCount = 0;
+
+// Adjustable 2FA validation window via web interface (Default: 30 seconds)
+// Global settings configurations
+int authTimeWindowSeconds = 30;
+int maxArrivalAgeSeconds = 300;
+unsigned long lastPingTime = 0;      // Tracks non-blocking network thread cycles
+int networkPingIntervalSeconds = 2;  // 👈 NEW: User-adjustable ping delay (Default: 2s)
+
+// ****** GLOBAL FUNCTIONS & Classes 
 
 String IdentifyManufacturer(String macAddress) {
   macAddress.toUpperCase();
@@ -391,12 +414,6 @@ class MyAdvertisedDeviceCallbacks : public BLEAdvertisedDeviceCallbacks {
   }
 };  // end of class MyAdvertisedDeviceCallbacks
 
-// Adjustable 2FA validation window via web interface (Default: 30 seconds)
-// Global settings configurations
-int authTimeWindowSeconds = 30;
-int maxArrivalAgeSeconds = 300;
-unsigned long lastPingTime = 0;      // Tracks non-blocking network thread cycles
-int networkPingIntervalSeconds = 2;  // 👈 NEW: User-adjustable ping delay (Default: 2s)
 
 bool isAuthorisedTokenPresent() {
   unsigned long now = millis();
@@ -414,22 +431,85 @@ bool isAuthorisedTokenPresent() {
   return false;
 }
 
+void saveConfigurationToFlash() {
+  // Open the "security" flash namespace in Read/Write mode (false)
+  prefs.begin("security", false);
+  
+  // 1. Commit stand-alone configuration adjustments
+  prefs.putInt("rssiGate", rssiThreshold);
+  prefs.putInt("presenceSec", presenceWindowSeconds);
+  prefs.putInt("scanTimeSec", scanSliceDuration);
+  prefs.putInt("authWindow", authTimeWindowSeconds);
+  prefs.putInt("arrivalLimit", maxArrivalAgeSeconds);
+  prefs.putInt("pingInterval", networkPingIntervalSeconds);
+  prefs.putInt("gateDuration", voiceGateOpenDurationSeconds);
+  
+  // 2. Commit tracking counter totals
+  prefs.putInt("btCount", authDeviceCount);
+  prefs.putInt("ipCount", authIPCount);
+  
+  // 3. Commit authorized Bluetooth structural items
+  for (int i = 0; i < authDeviceCount; i++) {
+    prefs.putString(("btMac" + String(i)).c_str(), authDevices[i].macAddress);
+    prefs.putString(("btType" + String(i)).c_str(), authDevices[i].deviceType);
+    prefs.putString(("btName" + String(i)).c_str(), authDevices[i].friendlyName);
+  }
+  
+  // 4. Commit authorized iPhone network configurations
+  for (int i = 0; i < authIPCount; i++) {
+    prefs.putUChar(("ipQuad" + String(i)).c_str(), authIPs[i].lastQuad);
+    prefs.putString(("ipName" + String(i)).c_str(), authIPs[i].friendlyName);
+  }
+  
+  prefs.end(); // Lock and close the storage container safely
+  Serial.println("💾 SUCCESS: All user configurations backed up to Non-Volatile Flash.");
+}
+
+void loadConfigurationFromFlash() {
+  // Open the "security" flash namespace in Read-Only mode (true)
+  prefs.begin("security", true);
+  
+  // 1. Load parameters, defaulting to your current values if flash is empty
+  rssiThreshold = prefs.getInt("rssiGate", -90);
+  presenceWindowSeconds = prefs.getInt("presenceSec", 60);
+  scanSliceDuration = prefs.getInt("scanTimeSec", 3);
+  authTimeWindowSeconds = prefs.getInt("authWindow", 30);
+  maxArrivalAgeSeconds = prefs.getInt("arrivalLimit", 300);
+  networkPingIntervalSeconds = prefs.getInt("pingInterval", 2);
+  voiceGateOpenDurationSeconds = prefs.getInt("gateDuration", 60);
+  
+  // 2. Load total database counts
+  authDeviceCount = prefs.getInt("btCount", 0);
+  authIPCount = prefs.getInt("ipCount", 0);
+  
+  // 3. Rebuild Authorized Bluetooth storage slots
+  for (int i = 0; i < authDeviceCount; i++) {
+    authDevices[i].macAddress = prefs.getString(("btMac" + String(i)).c_str(), "");
+    authDevices[i].deviceType = prefs.getString(("btType" + String(i)).c_str(), "");
+    authDevices[i].friendlyName = prefs.getString(("btName" + String(i)).c_str(), "");
+    authDevices[i].hasTrippedGate = false; // Fresh initialization setup
+  }
+  
+  // 4. Rebuild Authorized IP Network targets
+  for (int i = 0; i < authIPCount; i++) {
+    authIPs[i].lastQuad = prefs.getUChar(("ipQuad" + String(i)).c_str(), 0);
+    authIPs[i].friendlyName = prefs.getString(("ipName" + String(i)).c_str(), "");
+    authIPs[i].isOnline = false;
+    authIPs[i].hasTrippedGate = false;
+    authIPs[i].firstSeen = 0;
+    authIPs[i].lastSeen = 0;
+  }
+  
+  prefs.end();
+  Serial.println("🔄 SUCCESS: Authorization databases recovered from onboard Flash.");
+}
 
 
-#define MAX_AUTH_IPS 10
-AuthorisedIP authIPs[MAX_AUTH_IPS];
-int authIPCount = 0;
 
-// --- MASTER VOICE-GATE AUTHORISATION FLAGS ---
-bool securitySystemDisableAuthorised = false;  // The master boolean flag for your Alexa gate
-String authorisingDeviceNames = "";            // Holds concatenated names (e.g., "Tony's Phone + Keys")
-unsigned long gateActivationTime = 0;          // Tracks exactly when the fresh arrival triggered
 
-// User-adjustable time window that the gate stays OPEN (Default: 60 seconds)
-int voiceGateOpenDurationSeconds = 60;
+// original security system interface code  here 
 
-// prototypes
-boolean connectWifi();  // router handed out 192.168.1.169 for this initially
+boolean connectWifi();  // router handed out 192.168.1.169 for this initially at 27A
 
 //on/off callbacks
 bool Sec27ASetOn();
@@ -537,6 +617,8 @@ IPAddress secondaryDNS(8, 8, 4, 4);  // Optional backup DNS
 
 void setup() {
 
+
+
   pinMode(LedPin, OUTPUT);
 
   Serial.begin(115200);
@@ -544,6 +626,8 @@ void setup() {
 
   Serial.println("Booting 27a Security Interface...");
   delay(1000);
+
+  loadConfigurationFromFlash();
 
   //flash fast a few times to indicate CPU is booting
   digitalWrite(LedPin, LOW);
@@ -707,16 +791,21 @@ void setup() {
   pBLEScan->setInterval(100);
   pBLEScan->setWindow(99);
 
-  server.on("/", handleRoot);  // Tells the ESP32 to run handleRoot when someone visits
+  //server.on("/", handleRoot);  // Tells the ESP32 to run handleRoot when someone visits
   server.on("/RTCReSync", handleRTCReSync);
   server.on("/Reboot", handleReboot);
   server.on("/ProxyLog2", handleProxyLog2);
+  /*
   server.on("/H", handleLedOn);
   server.on("/L", handleLedOff);
+  */
   server.on("/SET", handleSet);
   server.on("/UNSET", handleUnSet);
+
   server.on("/setRadioParams", handleRadioParams);
 
+/*
+start of old route block
   // Route to Authorise a device
   server.on("/authorise", []() {
     String mac = server.arg("mac");
@@ -838,8 +927,160 @@ void setup() {
     server.send(303);
   });
 
-  // Always at the end of setup()
-  server.begin();
+end of old routes
+*/ 
+
+// ==========================================
+  // MASTER ROOT PANEL RENDERING ENDPOINT
+  // ==========================================
+  server.on("/", handleRoot); 
+
+  // ==========================================
+  // ROUTE: AUTHORISE NEW BLUETOOTH DEVICE
+  // ==========================================
+  server.on("/authorise", []() {
+    String mac = server.arg("mac");
+    String type = server.arg("type");
+    mac.toUpperCase();
+    
+    bool exists = false;
+    for(int i = 0; i < authDeviceCount; i++) {
+      if(authDevices[i].macAddress == mac) exists = true;
+    }
+    
+    if (!exists && authDeviceCount < MAX_AUTH_DEVICES && mac != "") {
+      authDevices[authDeviceCount].macAddress = mac;
+      authDevices[authDeviceCount].deviceType = type;
+      authDevices[authDeviceCount].friendlyName = ""; // Initially clear
+      authDevices[authDeviceCount].hasTrippedGate = false;
+      authDeviceCount++;
+      
+      // 💾 BACKUP INSTANTLY: Save changes to physical silicon tracking lines
+      saveConfigurationToFlash(); 
+    }
+    server.sendHeader("Location", "/");
+    server.send(303);
+  });
+
+  // ==========================================
+  // ROUTE: DE-AUTHORISE/REVOKE BLUETOOTH ACCESS
+  // ==========================================
+  server.on("/deauthorise", []() {
+    String mac = server.arg("mac");
+    mac.toUpperCase();
+    
+    for (int i = 0; i < authDeviceCount; i++) {
+      if (authDevices[i].macAddress == mac) {
+        for (int j = i; j < authDeviceCount - 1; j++) {
+          authDevices[j] = authDevices[j + 1];
+        }
+        authDeviceCount--;
+        
+        // 💾 BACKUP INSTANTLY
+        saveConfigurationToFlash(); 
+        break;
+      }
+    }
+    server.sendHeader("Location", "/");
+    server.send(303);
+  });
+
+  // ==========================================
+  // ROUTE: ASSIGN/RENAME FRIENDLY ALIAS
+  // ==========================================
+  server.on("/update-bt-name", []() {
+    String mac = server.arg("mac");
+    String name = server.arg("name");
+    mac.toUpperCase();
+    
+    for (int i = 0; i < authDeviceCount; i++) {
+      if (authDevices[i].macAddress == mac) {
+        authDevices[i].friendlyName = name;
+        
+        // 💾 BACKUP INSTANTLY
+        saveConfigurationToFlash(); 
+        break;
+      }
+    }
+    server.sendHeader("Location", "/");
+    server.send(303);
+  });
+
+  // ==========================================
+  // ROUTE: ADD VERIFIED PHONE STATIC IP
+  // ==========================================
+  server.on("/add-ip", []() {
+    int quad = server.arg("quad").toInt();
+    String name = server.arg("name");
+    
+    if (quad > 0 && quad < 255 && authIPCount < MAX_AUTH_IPS) {
+      authIPs[authIPCount].lastQuad = quad;
+      authIPs[authIPCount].friendlyName = name;
+      authIPs[authIPCount].isOnline = false;
+      authIPs[authIPCount].hasTrippedGate = false;
+      authIPs[authIPCount].firstSeen = 0;
+      authIPs[authIPCount].lastSeen = 0;
+      authIPCount++;
+      
+      // 💾 BACKUP INSTANTLY
+      saveConfigurationToFlash(); 
+    }
+    server.sendHeader("Location", "/");
+    server.send(303);
+  });
+
+  // ==========================================
+  // ROUTE: REMOVE VERIFIED PHONE IP 
+  // ==========================================
+  server.on("/remove-ip", []() {
+    int index = server.arg("index").toInt();
+    
+    if (index >= 0 && index < authIPCount) {
+      for (int i = index; i < authIPCount - 1; i++) {
+        authIPs[i] = authIPs[i + 1];
+      }
+      authIPCount--;
+      
+      // 💾 BACKUP INSTANTLY
+      saveConfigurationToFlash(); 
+    }
+    server.sendHeader("Location", "/");
+    server.send(303);
+  });
+
+  // ==========================================
+  // ROUTE: SAVE CORE QUANTUM TIME THRESHOLDS
+  // ==========================================
+  server.on("/save-settings", []() {
+    if (server.hasArg("window")) authTimeWindowSeconds = server.arg("window").toInt();
+    if (server.hasArg("arrival_limit")) maxArrivalAgeSeconds = server.arg("arrival_limit").toInt();
+    if (server.hasArg("ping_interval")) networkPingIntervalSeconds = server.arg("ping_interval").toInt();
+    if (server.hasArg("gate_duration")) voiceGateOpenDurationSeconds = server.arg("gate_duration").toInt();
+    
+    // 💾 BACKUP INSTANTLY
+    saveConfigurationToFlash(); 
+    
+    server.sendHeader("Location", "/");
+    server.send(303);
+  });
+
+  // ==========================================
+  // ROUTE: SAVE RADIO SLIDER SETTINGS
+  // ==========================================
+  server.on("/setRadioParams", []() {
+    if (server.hasArg("rssi")) rssiThreshold = server.arg("rssi").toInt();
+    if (server.hasArg("window")) presenceWindowSeconds = server.arg("window").toInt();
+    if (server.hasArg("scantime")) scanSliceDuration = server.arg("scantime").toInt();
+    
+    // 💾 BACKUP INSTANTLY
+    saveConfigurationToFlash(); 
+    
+    server.sendHeader("Location", "/");
+    server.send(303);
+  });
+
+  
+  server.begin(); // Always near the end of setup()
   Serial.println("HTTP Web Server Started!");
 
   // ⚡ LAUNCH THE INDEPENDENT THREAD ENGINE
@@ -1302,7 +1543,7 @@ works, but irrelevant
 
   // --- STREAMLINED FILTER CONTROLLER BOX (CONVERTED TO TEXT ENTRY WITH FREEZE HOOKS) ---
   html += "<div style='text-align: center; margin: 10px auto; padding: 10px; width: 90%; max-width: 380px; border: 1px solid #bbb; border-radius: 6px; font-size: 0.9em; background-color: #f9f9f9;'>";
-  html += "  <h5 style='margin: 0 0 8px 0;'>Radio & Filter Tweaks</h5>";
+  html += "  <h5 style='margin: 0 0 8px 0;'>Bluetooth Radio & Filter Settings</h5>";
   html += "  <form action='/setRadioParams' method='GET'>";
 
   // Input 1: RSSI Sensitivity
@@ -2187,6 +2428,8 @@ void handleUnSet() {
 }
 
 void handleRadioParams() {
+
+    Serial.println("is this handleRadioParams function even being used ?? " );
   if (server.hasArg("rssi")) rssiThreshold = server.arg("rssi").toInt();
   if (server.hasArg("window")) presenceWindowSeconds = server.arg("window").toInt();
   if (server.hasArg("scantime")) scanSliceDuration = server.arg("scantime").toInt();  // Parse new slider
