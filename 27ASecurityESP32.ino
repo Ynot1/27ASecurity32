@@ -693,10 +693,12 @@ void setup() {
   }
   digitalWrite(LedPin, HIGH);  // turn off LED
 
+/* dont need this really
   Serial.println("Making AlarmSoundingInputPin into an INPUT_PULLUP");
   //pinMode(AlarmSoundingInputPin, FUNCTION_3); old 8266 function, not needed in ESP32
   pinMode(AlarmSoundingInputPin, INPUT_PULLUP);
 
+*/
   Serial.println("Making SetUnsetInputPin into an INPUT_PULLUP");  // used to detect 27A Security  Set/Unset state
 
   //pinMode(SetUnsetInputPin, FUNCTION_3);
@@ -802,7 +804,7 @@ void setup() {
   server.on("/SET", handleSet);
   server.on("/UNSET", handleUnSet);
 
-  server.on("/setRadioParams", handleRadioParams);
+// server.on("/setRadioParams", handleRadioParams);
 
 /*
 start of old route block
@@ -1134,7 +1136,9 @@ void loop() {
     }
   }
 
+ PrevSec27ASetState = Sec27ASetState;            // edge detection of Burglar Alarm state
 
+/*
   Sec27ASoundingState = !digitalRead(AlarmSoundingInputPin);  // Used for Detecting the Alarm sounding
   delay(100);
   if (Sec27ASoundingState == LOW) {
@@ -1158,7 +1162,10 @@ void loop() {
   }
 
   PrevSec27ASoundingState = Sec27ASoundingState;  // remember prev state for next pass
-  PrevSec27ASetState = Sec27ASetState;            // edge detection of Burglar Alarm state
+
+  */
+
+ 
 
   if (wifiConnected) {
     // digitalWrite(LedPin, LOW); // turn on LED with voltage Low
@@ -2263,6 +2270,8 @@ void WatchDogPost() {
   delay(1000);
 }  // end WatchDogPost
 
+/*
+
 void TwitchLED() {
 
   pinMode(LedPin, OUTPUT);  // switch to an output
@@ -2273,6 +2282,8 @@ void TwitchLED() {
 
   //pinMode(LedPin, INPUT); // switch back to an input
 }  // end TwitchLED
+
+*/
 
 void SetTime() {
 
@@ -2385,7 +2396,7 @@ void handleProxyLog2() {
   server.sendHeader("Location", "/");
   server.send(303, "text/plain", "Redirecting...");
 }
-
+/* 
 void handleLedOn() {
   Serial.println("Button Pressed: LED On");
   digitalWrite(LedPin, LOW);
@@ -2407,6 +2418,7 @@ void handleLedOff() {
   server.sendHeader("Location", "/");
   server.send(303, "text/plain", "Redirecting...");
 }
+*/
 
 void handleSet() {
   Serial.println("Button Pressed: Alarm Set");
@@ -2426,7 +2438,7 @@ void handleUnSet() {
   server.sendHeader("Location", "/");
   server.send(303, "text/plain", "Redirecting...");
 }
-
+/*
 void handleRadioParams() {
 
     Serial.println("is this handleRadioParams function even being used ?? " );
@@ -2446,7 +2458,7 @@ void handleRadioParams() {
   server.sendHeader("Location", "/");
   server.send(303, "text/plain", "Redirecting...");
 }
-
+*/
 
 /* old scanner
 void runNetworkPingScanner() {
