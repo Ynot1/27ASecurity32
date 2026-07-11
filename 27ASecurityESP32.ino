@@ -1213,6 +1213,8 @@ new head statemnet provided
   // Display last Reboot Time
   html += "<p>Last Restart was " + LastRebootTime + " on " + LastRebootDate + " which was " + String(UpTimeDays) + " days ago" + "</p>";
 
+/*
+works, but irrelevant 
   // Display current state, and show ON/OFF buttons
   html += "<p>LED Status: <strong>" + ledState + "</strong></p>";
   if (ledState == "OFF") {
@@ -1221,6 +1223,8 @@ new head statemnet provided
   } else {
     html += "<p><a href=\"/L\"><button class=\"button button2\">TURN OFF</button></a></p>";
   }
+  */
+
   // ======================================================
   // LIVE ALEXA DISARM GATE STATUS BANNER
   // ======================================================
@@ -1257,11 +1261,11 @@ new head statemnet provided
   //Display Alarm set/Unset State
 
   if (Sec27ASetState == HIGH) {  // High is alarm unset state
-    html += "<p>Alarm Panel Status: <strong> UNSET (disabled/off) </strong></p>";
+    html += "<p>Current Security System Status: <strong> UNSET (disabled/off) </strong></p>";
     html += "<p><a href=\"/SET\"><button class=\"button\">SET Alarm</button></a></p>";
 
   } else {
-    html += "<p>Alarm Panel Status: <strong> SET (enabled/on) </strong></p>";
+    html += "<p>Current Security System Status: <strong> SET (enabled/on) </strong></p>";
     html += "<p><a href=\"UNSET\"><button class=\"button button2\">UnSET Alarm</button></a></p>";
   }
 
@@ -1269,7 +1273,7 @@ new head statemnet provided
   change from sliders to inpt boxes 
   // --- STREAMLINED FILTER CONTROLLER BOX ---
   html += "<div style='text-align: center; margin: 10px auto; padding: 10px; width: 90%; max-width: 380px; border: 1px solid #bbb; border-radius: 6px; font-size: 0.9em; background-color: #f9f9f9;'>";
-  html += "  <h5 style='margin: 0 0 8px 0;'>Radio & Filter Tweaks</h5>";
+  html += "  <h5 style='margin: 0 0 8px 0;'>Bluetooth Radio & Filter Settings</h5>";
   html += "  <form action='/setRadioParams' method='GET'>";
 
   // Slider 1: RSSI Sensitivity
@@ -1346,8 +1350,8 @@ new head statemnet provided
   // NEW: SETTINGS CONFIGURATION FORM (Adjustable Time Window)
   // ======================================================
   html += "<div style='margin: 20px auto; width: 95%; max-width: 650px; text-align: center; border: 1px dashed #666; padding: 10px;'>";
-  html += "<form action='/save-settings' method='POST'>";
-  html += "<b>2FA Authorisation Window: </b>";
+  html += "<form action='/save-settings' method='GET'>";
+  html += "<b>Bluetooth & Ping Device 2FA Authorisation Window: </b>";
   html += "<input type='number' name='window' value='" + String(authTimeWindowSeconds) + "' style='width:60px; text-align:center;'> seconds ";
   html += "<input type='submit' value='Update Window'>";
   html += "</form></div>";
@@ -1485,7 +1489,9 @@ changed to allow easy filling
                                                    "onfocus=\"sessionStorage.setItem('typing', 'true');\" "
                                                    "onblur=\"sessionStorage.removeItem('typing');\">s</div>";
 
-  html += "<div style='margin-top: 15px;'><input type='submit' value='Save All Settings' style='padding: 6px 20px; font-weight: bold; background-color: #333; color: white; border: none; cursor: pointer;'></div>";
+   
+  html += "    <input type='submit' class='buttonsmall' style='padding: 4px 15px; font-size: 0.85em; cursor: pointer;' value='Apply Changes'>";
+  //html += "<div style='margin-top: 15px;'><input type='submit' value='Save All Settings' style='padding: 6px 20px; font-weight: bold; background-color: #333; color: white; border: none; cursor: pointer;'></div>";
   html += "</form></div>";
 
 
@@ -1496,11 +1502,11 @@ changed to allow easy filling
   String subnetPrefix = String(localIP[0]) + "." + String(localIP[1]) + "." + String(localIP[2]) + ".";
 
   html += "<hr style='width: 95%; max-width: 700px; margin: 20px auto;'>";
-  html += "<h3>📱 Authorised iPhone Network Pinger (" + String(authIPCount) + "/" + String(MAX_AUTH_IPS) + ")</h3>";
+  html += "<h3>📱 Authorised Phone Network Pinger (" + String(authIPCount) + "/" + String(MAX_AUTH_IPS) + ")</h3>";
 
   // Interactive Entry Submission Form Block with Dynamic Auto-Refresh Freeze
   html += "<div style='margin: 10px auto; width: 95%; max-width: 700px; text-align: center; background:#eee; padding:8px;'>";
-  html += "<form action='/add-ip' method='POST' style='margin:0;'>";
+  html += "<form action='/add-ip' method='GET' style='margin:0;'>";
 
   html += "Target IP: <b>" + subnetPrefix + "</b>"
                                             "<input type='number' name='quad' min='1' max='254' placeholder='254' style='width:50px;' required "
@@ -1562,7 +1568,7 @@ changed to allow easy filling
       html += "<td>" + authDevices[i].deviceType + "</td>";
 
       // 1. INLINE FRIENDLY NAME FORM WITH AUTO-REFRESH FREEZE HOOKS
-      html += "<td><form action='/update-bt-name' method='POST' style='margin:0;'>";
+      html += "<td><form action='/update-bt-name' method='GET' style='margin:0;'>";
       html += "<input type='hidden' name='mac' value='" + authDevices[i].macAddress + "'>";
       html += "<input type='text' name='name' value='" + authDevices[i].friendlyName + "' style='width:110px;' "
                                                                                        "onfocus=\"sessionStorage.setItem('typing', 'true');\" "
