@@ -5,6 +5,7 @@
 #include "switch.h"
 #include "UpnpBroadcastResponder.h"
 #include "CallbackFunction.h"
+#include <ESPping.h>
 
 // Bluetooth section
 
@@ -29,6 +30,8 @@ struct TrackedBeacon {
   String deviceType;         // <-- Add this to store the name/manufacturer
   String findMyFingerprint;  // <- Holds the fixed unique identifier payload
 };
+
+
 
 const int MAX_DEVICES = 30;
 TrackedBeacon discoveredDevices[MAX_DEVICES];
@@ -240,14 +243,20 @@ class MyAdvertisedDeviceCallbacks : public BLEAdvertisedDeviceCallbacks {
 struct AuthorisedDevice {
   String macAddress;
   String deviceType;
+  String friendlyName; // 👈 NEW: Customizable friendly alias
 };
+
 
 #define MAX_AUTH_DEVICES 10
 AuthorisedDevice authDevices[MAX_AUTH_DEVICES];
 int authDeviceCount = 0;
 
 // Adjustable 2FA validation window via web interface (Default: 30 seconds)
+// Global settings configurations
 int authTimeWindowSeconds = 30; 
+int maxArrivalAgeSeconds = 300; 
+unsigned long lastPingTime = 0; // Tracks non-blocking network thread cycles
+int networkPingIntervalSeconds = 2; // 👈 NEW: User-adjustable ping delay (Default: 2s)
 
 bool isAuthorisedTokenPresent() {
   unsigned long now = millis();
@@ -264,6 +273,21 @@ bool isAuthorisedTokenPresent() {
   }
   return false; 
 }
+
+// --- NEW: IPHONE IP AUTHENTICATION STRUCTURE ---
+struct AuthorisedIP {
+  uint8_t lastQuad;             // Only storing the 4th quad (0-255)
+  String friendlyName;          // "Tony's iPhone"
+  unsigned long firstSeen = 0;  // Reset when it joins, tracks fresh arrival
+  unsigned long lastSeen = 0;   // Updated on every successful ICMP response
+  bool isOnline = false;        // Real-time ping state tracker
+};
+
+#define MAX_AUTH_IPS 10
+AuthorisedIP authIPs[MAX_AUTH_IPS];
+int authIPCount = 0;
+
+
 
 // prototypes
 boolean connectWifi();  // router handed out 192.168.1.169 for this initially
@@ -456,7 +480,7 @@ void setup() {
   pinMode(SetUnsetInputPin, INPUT);
 
   // Start the server and print local IP address
-  server.begin();
+ // server.begin();
   Serial.println("");
   Serial.println("Wi-Fi connected.");
   Serial.print("IP address to visit: http://");
@@ -596,10 +620,78 @@ void setup() {
   });
 
   // Route to Save the Adjustable Time Window form field
-  server.on("/save-settings", []() {
+    server.on("/save-settings", []() {
     if (server.hasArg("window")) {
       authTimeWindowSeconds = server.arg("window").toInt();
     }
+    if (server.hasArg("arrival_limit")) {
+      maxArrivalAgeSeconds = server.arg("arrival_limit").toInt();
+    }
+    if (server.hasArg("ping_interval")) { // 👈 NEW: Capture ping slider/number field
+      networkPingIntervalSeconds = server.arg("ping_interval").toInt();
+      if (networkPingIntervalSeconds < 1) networkPingIntervalSeconds = 1; // Safety floor
+    }
+    server.sendHeader("Location", "/");
+    server.send(303);
+  });
+
+ // ========================================================
+  // ROUTE: UPDATE BLUETOOTH CUSTOM FRIENDLY ALIAS NAME
+  // ========================================================
+  server.on("/update-bt-name", []() {
+    String mac = server.arg("mac");
+    String name = server.arg("name");
+    mac.toUpperCase();
+    
+    // Search your authorised array for a matching MAC and assign the name
+    for (int i = 0; i < authDeviceCount; i++) {
+      if (authDevices[i].macAddress == mac) {
+        authDevices[i].friendlyName = name;
+        break;
+      }
+    }
+    
+    // Bounce the browser cleanly back to the home page dashboard
+    server.sendHeader("Location", "/");
+    server.send(303);
+  });
+
+// ========================================================
+  // ROUTE: ADD NEW IPHONE IP TO DATABASE
+  // ========================================================
+  server.on("/add-ip", []() {
+    int quad = server.arg("quad").toInt();
+    String name = server.arg("name");
+    
+    // Validate boundaries (1-254) and space constraints
+    if (quad > 0 && quad < 255 && authIPCount < MAX_AUTH_IPS) {
+      authIPs[authIPCount].lastQuad = quad;
+      authIPs[authIPCount].friendlyName = name;
+      authIPs[authIPCount].isOnline = false;
+      authIPs[authIPCount].firstSeen = 0;
+      authIPs[authIPCount].lastSeen = 0;
+      authIPCount++;
+    }
+    
+    // Redirect browser cleanly back to the home panel
+    server.sendHeader("Location", "/");
+    server.send(303);
+  });
+
+  // ========================================================
+  // ROUTE: REMOVE IPHONE IP FROM DATABASE
+  // ========================================================
+  server.on("/remove-ip", []() {
+    int index = server.arg("index").toInt();
+    
+    // Verify target line index bounds, shift array items left to delete
+    if (index >= 0 && index < authIPCount) {
+      for (int i = index; i < authIPCount - 1; i++) {
+        authIPs[i] = authIPs[i + 1];
+      }
+      authIPCount--;
+    }
+    
     server.sendHeader("Location", "/");
     server.send(303);
   });
@@ -847,6 +939,10 @@ void loop() {
     lastBleCycle = currentMillis;
   }
 
+runNetworkPingScanner(); // Ping any defined IP address's 
+
+delay(1);  // Small safety yield to prevent watchdog resets
+
 }  // end Void Loop
 
 
@@ -879,7 +975,13 @@ html += "<meta charset='UTF-8'>"; // 👈 allows  modern 4-byte Unicode characte
   html += "<link rel=\"icon\" href=\"data:,\">";
 
   // Auto-refresh the page every 5 seconds to keep the BT list live
-  html += "<meta http-equiv='refresh' content='5'>";
+  html += "<script>";
+html += "setInterval(function() {";
+html += "  if (!sessionStorage.getItem('typing')) {";
+html += "    window.location.reload();";
+html += "  }";
+html += "}, 2000);"; // Refreshes every 2 seconds, but ONLY if you aren't typing
+html += "</script>";
 
   // Simple CSS styling for mobile-responsiveness
   html += "<style>html { font-family: Helvetica; display: inline-block; margin: 0px auto; text-align: center;}";
@@ -970,24 +1072,38 @@ html += "<meta charset='UTF-8'>"; // 👈 allows  modern 4-byte Unicode characte
   html += "<input type='submit' value='Update Window'>";
   html += "</form></div>";
 
-  // ======================================================
+ // ======================================================
   // TABLE 1: ACTIVE BLUETOOTH TOKENS (SCANNER)
   // ======================================================
   html += "<h3>Active Bluetooth Tokens (RSSI > " + String(rssiThreshold) + " dBm)</h3>";
-  html += "<table border='1' align='center' style='margin-bottom: 30px; width: 95%; max-width: 650px;'>";
+  html += "<table border='1' align='center' style='margin-bottom: 30px; width: 95%; max-width: 700px;'>"; // Fixed width to 700px
   html += "<tr><th>MAC Address</th><th>Device Info</th><th>RSSI</th><th>Last Seen</th><th>Total Duration</th><th>Action</th></tr>";
 
-  unsigned long currentMillis = millis();
   int count = 0;
+  unsigned long currentMillis = millis();
 
   for (int i = 0; i < deviceCount; i++) {
     if (currentMillis - discoveredDevices[i].lastSeen < ((unsigned long)presenceWindowSeconds * 1000)) {
       html += "<tr><td><code>" + discoveredDevices[i].macAddress + "</code></td>";
       
+      // NEW LOOKUP: Check if this MAC address has a custom friendly name saved in Table 2
+      String activeAlias = "";
+      for(int k = 0; k < authDeviceCount; k++) {
+        if(authDevices[k].macAddress == discoveredDevices[i].macAddress) {
+          activeAlias = authDevices[k].friendlyName;
+        }
+      }
+
+      html += "<td>";
+      // If a friendly name exists, print it as a purple badge above the device type
+      if(activeAlias != "") {
+        html += "<b style='color:purple;'>[" + activeAlias + "]</b><br>";
+      }
+      
       if (discoveredDevices[i].findMyFingerprint != "") {
-        html += "<td><b>" + discoveredDevices[i].deviceType + "</b><br><small style='color:blue;'>Key: " + discoveredDevices[i].findMyFingerprint + "</small></td>";
+        html += "<b>" + discoveredDevices[i].deviceType + "</b><br><small style='color:blue;'>Key: " + discoveredDevices[i].findMyFingerprint + "</small></td>";
       } else {
-        html += "<td>" + discoveredDevices[i].deviceType + "</td>";
+        html += discoveredDevices[i].deviceType + "</td>";
       }
       
       html += "<td>" + String(discoveredDevices[i].rssi) + " dBm</td>";
@@ -1015,41 +1131,139 @@ html += "<meta charset='UTF-8'>"; // 👈 allows  modern 4-byte Unicode characte
   }
   html += "</table>";
 
+    // ======================================================
+  // UPDATED: SETTINGS CONFIGURATION FORM (Triple Value Constraints)
   // ======================================================
-  // NEW: TABLE 2: NOMINATED AUTHORISED TOKENS (SECURITY DATABASE)
+  html += "<div style='margin: 20px auto; width: 95%; max-width: 700px; text-align: center; border: 1px dashed #666; padding: 15px; background-color: #fff;'>";
+  html += "<form action='/save-settings' method='POST'>";
+  
+  html += "<div style='display: inline-block; margin: 5px 15px;'><b>Active Presence Window: </b>";
+  html += "<input type='number' name='window' value='" + String(authTimeWindowSeconds) + "' style='width:60px; text-align:center;'> seconds</div>";
+  
+  html += "<div style='display: inline-block; margin: 5px 15px;'><b>🔒 Fresh Arrival Trust: </b>";
+  html += "<input type='number' name='arrival_limit' value='" + String(maxArrivalAgeSeconds) + "' style='width:60px; text-align:center;'> seconds</div>";
+  
+  // NEW INPUT ROW FOR PING REFRESH RATE
+  html += "<div style='display: inline-block; margin: 5px 15px;'><b>⚡ Network Ping Interval: </b>";
+  html += "<input type='number' name='ping_interval' min='1' max='60' value='" + String(networkPingIntervalSeconds) + "' style='width:60px; text-align:center;'> seconds</div>";
+  
+  html += "<div style='margin-top: 15px;'><input type='submit' value='Save All Settings' style='padding: 6px 20px; font-weight: bold; background-color: #333; color: white; border: none; cursor: pointer;'></div>";
+  html += "</form></div>";
+
+
+
   // ======================================================
-  html += "<hr style='width: 95%; max-width: 650px; margin: 20px auto;'>";
+  // NEW: TABLE 3: AUTHORISED IPHONE NETWORK PINGER DATABASE
+  // ======================================================
+  IPAddress localIP = WiFi.localIP();
+  String subnetPrefix = String(localIP[0]) + "." + String(localIP[1]) + "." + String(localIP[2]) + ".";
+
+  html += "<hr style='width: 95%; max-width: 700px; margin: 20px auto;'>";
+  html += "<h3>📱 Authorised iPhone Network Pinger (" + String(authIPCount) + "/" + String(MAX_AUTH_IPS) + ")</h3>";
+  
+ // Interactive Entry Submission Form Block with Dynamic Auto-Refresh Freeze
+  html += "<div style='margin: 10px auto; width: 95%; max-width: 700px; text-align: center; background:#eee; padding:8px;'>";
+  html += "<form action='/add-ip' method='POST' style='margin:0;'>";
+  
+  html += "Target IP: <b>" + subnetPrefix + "</b>"
+          "<input type='number' name='quad' min='1' max='254' placeholder='254' style='width:50px;' required "
+          "onfocus=\"sessionStorage.setItem('typing', 'true');\" "
+          "onblur=\"sessionStorage.removeItem('typing');\"> ";
+          
+  html += "Name: <input type='text' name='name' placeholder=\"Tony's iPhone\" style='width:120px;' required "
+          "onfocus=\"sessionStorage.setItem('typing', 'true');\" "
+          "onblur=\"sessionStorage.removeItem('typing');\"> ";
+          
+  html += "<input type='submit' value='+ Add Phone Key' style='background:#008CBA; color:white; border:none; padding:4px 10px; cursor:pointer;'>";
+  html += "</form></div>";
+
+  html += "<table border='1' align='center' style='margin-bottom: 40px; width: 95%; max-width: 700px; background-color: #fafafa;'>";
+  html += "<tr style='background-color: #dcdcdc;'><th>Friendly Name</th><th>Target IP Address</th><th>Network Ping Status</th><th>Verification State</th><th>Action</th></tr>";
+
+  if (authIPCount == 0) {
+    html += "<tr><td colspan='5' style='color: gray; text-align:center; padding: 10px;'>No verified mobile IPs defined. Use the input form wrapper above.</td></tr>";
+  } else {
+    for (int i = 0; i < authIPCount; i++) {
+      String fullTargetIP = subnetPrefix + String(authIPs[i].lastQuad);
+      html += "<tr><td><b>" + authIPs[i].friendlyName + "</b></td>";
+      html += "<td><code>" + fullTargetIP + "</code></td>";
+      
+      // Ping Connectivity Indicator Check
+      String pingIndicator = authIPs[i].isOnline ? "<span style='color:green;'>Connected 📶</span>" : "<span style='color:grey;'>Unreachable 💤</span>";
+      html += "<td>" + pingIndicator + "</td>";
+      
+      // Calculate Network Arrival Trust Bounds
+      String ipVerificationState = "<span style='color:red; font-weight:bold;'>🔴 Expired</span>";
+      if (authIPs[i].isOnline) {
+        unsigned long totalDurationSeconds = (currentMillis - authIPs[i].firstSeen) / 1000;
+        if (totalDurationSeconds <= (unsigned long)maxArrivalAgeSeconds) {
+          ipVerificationState = "<span style='color:green; font-weight:bold;'>🟢 Valid (" + String(maxArrivalAgeSeconds - totalDurationSeconds) + "s trust left)</span>";
+        } else {
+          ipVerificationState = "<span style='color:orange; font-weight:bold;'>🟠 Expired (Static Home)</span>";
+        }
+      }
+      
+      html += "<td>" + ipVerificationState + "</td>";
+      html += "<td><a href='/remove-ip?index=" + String(i) + "'><button style='background-color:#f44336; color:white; border:none; padding:4px 8px; cursor:pointer;'>❌ Remove</button></a></td></tr>";
+    }
+  }
+  html += "</table>";
+
+// ======================================================
+  // UPDATED: TABLE 2: NOMINATED AUTHORISED TOKENS (SECURITY DATABASE)
+  // ======================================================
+  html += "<hr style='width: 95%; max-width: 700px; margin: 20px auto;'>";
   html += "<h3>🔒 Authorised 2FA Security Tokens (" + String(authDeviceCount) + "/" + String(MAX_AUTH_DEVICES) + ")</h3>";
-  html += "<table border='1' align='center' style='margin-bottom: 20px; width: 95%; max-width: 650px; background-color: #f9f9f9;'>";
-  html += "<tr style='background-color: #e0e0e0;'><th>MAC Address</th><th>Device Info</th><th>Current Proximity Status</th><th>Action</th></tr>";
+  html += "<table border='1' align='center' style='margin-bottom: 20px; width: 95%; max-width: 700px; background-color: #f9f9f9;'>";
+  html += "<tr style='background-color: #e0e0e0;'><th>MAC Address</th><th>Device Specs</th><th>Friendly Identity Name</th><th>Current Proximity Status</th><th>Action</th></tr>";
 
   if (authDeviceCount == 0) {
-    html += "<tr><td colspan='4' style='color: gray; text-align:center; padding: 10px;'>No authorised devices defined. Click '+ Authorise' on the table above to add keys.</td></tr>";
+    html += "<tr><td colspan='5' style='color: gray; text-align:center; padding: 10px;'>No authorised devices defined. Click '+ Authorise' on the table above to add keys.</td></tr>";
   } else {
     for (int i = 0; i < authDeviceCount; i++) {
       html += "<tr><td><code>" + authDevices[i].macAddress + "</code></td>";
-      html += "<td><b>" + authDevices[i].deviceType + "</b></td>";
+      html += "<td>" + authDevices[i].deviceType + "</td>";
       
-      // Calculate Real-Time Proximity Status indicator text
-      String liveStatus = "<span style='color:red;'>🔴 Out of Range / Inactive</span>";
+      // 1. INLINE FRIENDLY NAME FORM WITH AUTO-REFRESH FREEZE HOOKS
+      html += "<td><form action='/update-bt-name' method='POST' style='margin:0;'>";
+      html += "<input type='hidden' name='mac' value='" + authDevices[i].macAddress + "'>";
+      html += "<input type='text' name='name' value='" + authDevices[i].friendlyName + "' style='width:110px;' "
+              "onfocus=\"sessionStorage.setItem('typing', 'true');\" "
+              "onblur=\"sessionStorage.removeItem('typing');\"> ";
+      html += "<input type='submit' value='Set' style='font-size:10px; padding:2px;'>";
+      html += "</form></td>";
+      
+      // 2. CALCULATE VALID / EXPIRED STATUS STRATEGY
+      String liveStatus = "<span style='color:red; font-weight:bold;'>🔴 Expired (Out of Range)</span>";
       for (int j = 0; j < deviceCount; j++) {
         if (discoveredDevices[j].macAddress == authDevices[i].macAddress) {
-          unsigned long delta = (currentMillis - discoveredDevices[j].lastSeen) / 1000;
-          if (delta <= (unsigned long)authTimeWindowSeconds) {
-            liveStatus = "<span style='color:green;'>🟢 Active Verification Present (" + String(delta) + "s ago)</span>";
+          unsigned long lastSeenDelta = (currentMillis - discoveredDevices[j].lastSeen) / 1000;
+          unsigned long totalDurationSeconds = (currentMillis - discoveredDevices[j].firstSeen) / 1000;
+          
+          bool isCurrentlyPresent = (lastSeenDelta <= (unsigned long)authTimeWindowSeconds);
+          bool isFreshArrival = (totalDurationSeconds <= (unsigned long)maxArrivalAgeSeconds);
+          
+          if (isCurrentlyPresent && isFreshArrival) {
+            unsigned long remainingTrust = maxArrivalAgeSeconds - totalDurationSeconds;
+            liveStatus = "<span style='color:green; font-weight:bold;'>🟢 Valid (" + String(remainingTrust) + "s trust left)</span>";
+          } else if (isCurrentlyPresent && !isFreshArrival) {
+            liveStatus = "<span style='color:orange; font-weight:bold;'>🟠 Expired (Static / Sitting Home)</span>";
           } else {
-            liveStatus = "<span style='color:orange;'>🟠 Stale (Seen " + String(delta) + "s ago)</span>";
+            liveStatus = "<span style='color:red; font-weight:bold;'>🔴 Expired (Inactive " + String(lastSeenDelta) + "s)</span>";
           }
           break;
         }
       }
       
       html += "<td>" + liveStatus + "</td>";
+      
       // DE-AUTHORISE ACTION BUTTON
       html += "<td><a href='/deauthorise?mac=" + authDevices[i].macAddress + "'><button style='background-color:#f44336; color:white; border:none; padding:4px 8px; cursor:pointer;'>❌ Revoke</button></a></td></tr>";
     }
   }
   html += "</table>";
+  
+ // Old logging section
 
   //Serial.println("about to write headers .");
   // 1. Explicitly display the table headers from your dedicated slots (60, 61, 62)
@@ -1074,10 +1288,7 @@ html += "<meta charset='UTF-8'>"; // 👈 allows  modern 4-byte Unicode characte
   //Display Clock Resync, Spare1 Buttons, Spare2 Button
   html += "<p><a href=\"/RTCReSync\"><button class=\"buttonsmall\">RTC ReSync</button></a> <a href=\"/Reboot\"><button class=\"buttonsmall\">Reboot</button></a> <a href=\"/ProxyLog2\"> <button class=\"buttonsmall\">Spare2</button></a></p>";
 
-
-
   html += "</body></html>";
-
 
   // --- END OF HTML WEB PAGE ---
 
@@ -1595,4 +1806,183 @@ void handleRadioParams() {
   // Send an HTTP Redirect (303) back to dashboard root
   server.sendHeader("Location", "/");
   server.send(303, "text/plain", "Redirecting...");
+}
+
+
+/* old scanner
+void runNetworkPingScanner() {
+  unsigned long currentMillis = millis();
+  
+       Serial.println("in Ping routine" );
+  // Dynamic User-Adjusted Interval Constraint (Default: 2 seconds)
+  if (currentMillis - lastPingTime >= ((unsigned long)networkPingIntervalSeconds * 1000)) {
+    lastPingTime = currentMillis;
+    Serial.println("its time to ping" );
+    // Fetch local gateway data structures cleanly
+    IPAddress localIP = WiFi.localIP();
+    
+    for (int i = 0; i < authIPCount; i++) {
+      if (authIPs[i].lastQuad == 0) continue; 
+      Serial.println(authIPs[i].lastQuad );
+      // FIXED: Correctly isolate individual byte quads using array indexes
+      IPAddress targetIP(localIP[0], localIP[1], localIP[2], authIPs[i].lastQuad);
+
+       Serial.println(targetIP);
+
+      // Run ESPping check (Sends 1 packet with a 500ms timeout window)
+      if (Ping.ping(targetIP, 1)) {
+        // iPhone responded!
+        Serial.println("phone online" );
+        if (!authIPs[i].isOnline || (currentMillis - authIPs[i].lastSeen > 60000)) {
+          // Fresh arrival: Reset the countdown window if previously offline
+          authIPs[i].firstSeen = currentMillis;
+        }
+        authIPs[i].lastSeen = currentMillis;
+        authIPs[i].isOnline = true;
+      } else {
+        // iPhone went silent (or went out of range)
+        authIPs[i].isOnline = false;
+        Serial.println("phone not online" );
+      }
+    }
+  }
+}
+
+*/
+
+/* 
+
+2nd attempt
+void runNetworkPingScanner() {
+  unsigned long currentMillis = millis();
+  
+  // Dynamic User-Adjusted Interval Constraint (Default: 2 seconds)
+  if (currentMillis - lastPingTime >= ((unsigned long)networkPingIntervalSeconds * 1000)) {
+    lastPingTime = currentMillis;
+    
+    // 1. Fetch dynamic local configuration
+    IPAddress localIP = WiFi.localIP();
+    
+    // 2. FIXED: Explicitly convert the first 3 fields into clean, raw numbers
+    uint8_t ip0 = localIP[0];
+    uint8_t ip1 = localIP[1];
+    uint8_t ip2 = localIP[2];
+    
+    for (int i = 0; i < authIPCount; i++) {
+      if (authIPs[i].lastQuad == 0) continue; 
+      
+      // 3. Assemble target destination using raw numbers safely
+      IPAddress targetIP(ip0, ip1, ip2, authIPs[i].lastQuad);
+      
+      // 4. Debug output verification line
+      Serial.print("Issuing core ping request to destination address: ");
+      Serial.println(targetIP);
+      
+      // Run ESPping check (Sends 1 packet with a 500ms timeout window)
+      if (Ping.ping(targetIP, 1)) {
+        Serial.println(" -> SUCCESS! Target device online.");
+        // iPhone responded!
+        if (!authIPs[i].isOnline || (currentMillis - authIPs[i].lastSeen > 60000)) {
+          // Fresh arrival: Reset the countdown window if previously offline
+          authIPs[i].firstSeen = currentMillis;
+        }
+        authIPs[i].lastSeen = currentMillis;
+        authIPs[i].isOnline = true;
+      } else {
+        Serial.println(" -> FAILED! Host unreachable.");
+        // iPhone went silent (or went out of range)
+        authIPs[i].isOnline = false;
+      }
+    }
+  }
+}
+
+*/
+/*
+3rd attempt
+void runNetworkPingScanner() {
+  unsigned long currentMillis = millis();
+  
+  // Dynamic User-Adjusted Interval Constraint (Default: 2 seconds)
+  if (currentMillis - lastPingTime >= ((unsigned long)networkPingIntervalSeconds * 1000)) {
+    lastPingTime = currentMillis;
+    
+    // 1. Fetch live network parameters
+    IPAddress localIP = WiFi.localIP();
+    
+    for (int i = 0; i < authIPCount; i++) {
+      if (authIPs[i].lastQuad == 0) continue; 
+      
+      // 2. FIXED: Instantiate the IPAddress object via explicit bracket constructor formatting
+      IPAddress targetIP;
+      targetIP[0] = localIP[0];
+      targetIP[1] = localIP[1];
+      targetIP[2] = localIP[2];
+      targetIP[3] = authIPs[i].lastQuad;
+      
+      // Debug verification printouts
+      Serial.print("Issuing core ping request to destination address: ");
+      Serial.println(targetIP);
+      
+      // 3. Execute core network ping via the dvarrel library syntax wrapper
+      if (Ping.ping(targetIP, 1)) {
+        Serial.println(" -> SUCCESS! Target device online.");
+        
+        if (!authIPs[i].isOnline || (currentMillis - authIPs[i].lastSeen > 60000)) {
+          // Fresh arrival trigger state hook reset
+          authIPs[i].firstSeen = currentMillis;
+        }
+        authIPs[i].lastSeen = currentMillis;
+        authIPs[i].isOnline = true;
+      } else {
+        Serial.println(" -> FAILED! Host unreachable.");
+        authIPs[i].isOnline = false;
+      }
+    }
+  }
+}
+*/
+
+void runNetworkPingScanner() {
+  unsigned long currentMillis = millis();
+  
+  // Dynamic User-Adjusted Interval Constraint (Default: 2 seconds)
+  if (currentMillis - lastPingTime >= ((unsigned long)networkPingIntervalSeconds * 1000)) {
+    lastPingTime = currentMillis;
+    
+    // 1. Fetch active dynamic configuration
+    IPAddress localIP = WiFi.localIP();
+    
+    for (int i = 0; i < authIPCount; i++) {
+      if (authIPs[i].lastQuad == 0) continue; 
+      
+      // 2. FIXED: Construct a raw un-mangled C-String format bypassing the constructor object bugs
+      String ipString = String(localIP[0]) + "." + 
+                        String(localIP[1]) + "." + 
+                        String(localIP[2]) + "." + 
+                        String(authIPs[i].lastQuad);
+      
+      // Convert to a standard character array reference pointer container
+      const char* rawTargetHost = ipString.c_str();
+      
+      // Debug verification logs
+      Serial.print("Issuing bypass raw-string ping to destination: ");
+      Serial.println(rawTargetHost);
+      
+      // 3. Execute network call via raw text string pointer override framework
+      if (Ping.ping(rawTargetHost, 1)) {
+        Serial.println(" -> SUCCESS! Target device online.");
+        
+        if (!authIPs[i].isOnline || (currentMillis - authIPs[i].lastSeen > 60000)) {
+          // Fresh arrival authentication trigger window reset
+          authIPs[i].firstSeen = currentMillis;
+        }
+        authIPs[i].lastSeen = currentMillis;
+        authIPs[i].isOnline = true;
+      } else {
+        Serial.println(" -> FAILED! Host unreachable.");
+        authIPs[i].isOnline = false;
+      }
+    }
+  }
 }
