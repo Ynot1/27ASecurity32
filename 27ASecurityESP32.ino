@@ -43,7 +43,7 @@ String IdentifyManufacturer(String macAddress) {
   // 1. Direct Hardcoded Matches (Must use UPPERCASE letters!)
   if (macAddress == "38:F9:D3:19:96:BA") return "Tony's MacBook";
   if (macAddress == "84:B1:E4:08:62:AB") return "Tony's IPHONE13";
- if (macAddress == "10:00:20:72:5B:7A") return "Tony's iPad (3)";
+  if (macAddress == "10:00:20:72:5B:7A") return "Tony's iPad (3)";
 
   // 2. Extract first 3 bytes (the OUI prefix e.g., "00:05:78")
   String prefix = macAddress.substring(0, 8);
@@ -243,7 +243,7 @@ class MyAdvertisedDeviceCallbacks : public BLEAdvertisedDeviceCallbacks {
 struct AuthorisedDevice {
   String macAddress;
   String deviceType;
-  String friendlyName; // 👈 NEW: Customizable friendly alias
+  String friendlyName;  // 👈 NEW: Customizable friendly alias
 };
 
 
@@ -253,25 +253,25 @@ int authDeviceCount = 0;
 
 // Adjustable 2FA validation window via web interface (Default: 30 seconds)
 // Global settings configurations
-int authTimeWindowSeconds = 30; 
-int maxArrivalAgeSeconds = 300; 
-unsigned long lastPingTime = 0; // Tracks non-blocking network thread cycles
-int networkPingIntervalSeconds = 2; // 👈 NEW: User-adjustable ping delay (Default: 2s)
+int authTimeWindowSeconds = 30;
+int maxArrivalAgeSeconds = 300;
+unsigned long lastPingTime = 0;      // Tracks non-blocking network thread cycles
+int networkPingIntervalSeconds = 2;  // 👈 NEW: User-adjustable ping delay (Default: 2s)
 
 bool isAuthorisedTokenPresent() {
   unsigned long now = millis();
-  
+
   for (int i = 0; i < authDeviceCount; i++) {
     for (int j = 0; j < deviceCount; j++) {
       if (discoveredDevices[j].macAddress == authDevices[i].macAddress) {
         unsigned long timeDelta = (now - discoveredDevices[j].lastSeen) / 1000;
         if (timeDelta <= (unsigned long)authTimeWindowSeconds) {
-          return true; // Match found! An authorized physical token is actively inside the room.
+          return true;  // Match found! An authorized physical token is actively inside the room.
         }
       }
     }
   }
-  return false; 
+  return false;
 }
 
 // --- NEW: IPHONE IP AUTHENTICATION STRUCTURE ---
@@ -288,6 +288,7 @@ AuthorisedIP authIPs[MAX_AUTH_IPS];
 int authIPCount = 0;
 
 
+//bool isUserLoadingWebPage = false;  // Tracks if the server is actively transmitting HTML
 
 // prototypes
 boolean connectWifi();  // router handed out 192.168.1.169 for this initially
@@ -480,7 +481,7 @@ void setup() {
   pinMode(SetUnsetInputPin, INPUT);
 
   // Start the server and print local IP address
- // server.begin();
+  // server.begin();
   Serial.println("");
   Serial.println("Wi-Fi connected.");
   Serial.print("IP address to visit: http://");
@@ -578,18 +579,18 @@ void setup() {
   server.on("/UNSET", handleUnSet);
   server.on("/setRadioParams", handleRadioParams);
 
-// Route to Authorise a device
+  // Route to Authorise a device
   server.on("/authorise", []() {
     String mac = server.arg("mac");
     String type = server.arg("type");
     mac.toUpperCase();
-    
+
     // Check if already authorised or if array is full
     bool exists = false;
-    for(int i=0; i<authDeviceCount; i++) {
-      if(authDevices[i].macAddress == mac) exists = true;
+    for (int i = 0; i < authDeviceCount; i++) {
+      if (authDevices[i].macAddress == mac) exists = true;
     }
-    
+
     if (!exists && authDeviceCount < MAX_AUTH_DEVICES && mac != "") {
       authDevices[authDeviceCount].macAddress = mac;
       authDevices[authDeviceCount].deviceType = type;
@@ -604,7 +605,7 @@ void setup() {
   server.on("/deauthorise", []() {
     String mac = server.arg("mac");
     mac.toUpperCase();
-    
+
     // Search array and shift items left to remove it cleanly
     for (int i = 0; i < authDeviceCount; i++) {
       if (authDevices[i].macAddress == mac) {
@@ -620,29 +621,29 @@ void setup() {
   });
 
   // Route to Save the Adjustable Time Window form field
-    server.on("/save-settings", []() {
+  server.on("/save-settings", []() {
     if (server.hasArg("window")) {
       authTimeWindowSeconds = server.arg("window").toInt();
     }
     if (server.hasArg("arrival_limit")) {
       maxArrivalAgeSeconds = server.arg("arrival_limit").toInt();
     }
-    if (server.hasArg("ping_interval")) { // 👈 NEW: Capture ping slider/number field
+    if (server.hasArg("ping_interval")) {  // 👈 NEW: Capture ping slider/number field
       networkPingIntervalSeconds = server.arg("ping_interval").toInt();
-      if (networkPingIntervalSeconds < 1) networkPingIntervalSeconds = 1; // Safety floor
+      if (networkPingIntervalSeconds < 1) networkPingIntervalSeconds = 1;  // Safety floor
     }
     server.sendHeader("Location", "/");
     server.send(303);
   });
 
- // ========================================================
+  // ========================================================
   // ROUTE: UPDATE BLUETOOTH CUSTOM FRIENDLY ALIAS NAME
   // ========================================================
   server.on("/update-bt-name", []() {
     String mac = server.arg("mac");
     String name = server.arg("name");
     mac.toUpperCase();
-    
+
     // Search your authorised array for a matching MAC and assign the name
     for (int i = 0; i < authDeviceCount; i++) {
       if (authDevices[i].macAddress == mac) {
@@ -650,19 +651,19 @@ void setup() {
         break;
       }
     }
-    
+
     // Bounce the browser cleanly back to the home page dashboard
     server.sendHeader("Location", "/");
     server.send(303);
   });
 
-// ========================================================
+  // ========================================================
   // ROUTE: ADD NEW IPHONE IP TO DATABASE
   // ========================================================
   server.on("/add-ip", []() {
     int quad = server.arg("quad").toInt();
     String name = server.arg("name");
-    
+
     // Validate boundaries (1-254) and space constraints
     if (quad > 0 && quad < 255 && authIPCount < MAX_AUTH_IPS) {
       authIPs[authIPCount].lastQuad = quad;
@@ -672,7 +673,7 @@ void setup() {
       authIPs[authIPCount].lastSeen = 0;
       authIPCount++;
     }
-    
+
     // Redirect browser cleanly back to the home panel
     server.sendHeader("Location", "/");
     server.send(303);
@@ -683,7 +684,7 @@ void setup() {
   // ========================================================
   server.on("/remove-ip", []() {
     int index = server.arg("index").toInt();
-    
+
     // Verify target line index bounds, shift array items left to delete
     if (index >= 0 && index < authIPCount) {
       for (int i = index; i < authIPCount - 1; i++) {
@@ -691,12 +692,26 @@ void setup() {
       }
       authIPCount--;
     }
-    
+
     server.sendHeader("Location", "/");
     server.send(303);
   });
 
+   // Always at the end of setup()
   server.begin();
+  Serial.println("HTTP Web Server Started!");
+
+  // ⚡ LAUNCH THE INDEPENDENT THREAD ENGINE
+  xTaskCreatePinnedToCore(
+    networkPingTaskEngine,   // Function execution name
+    "PingTask",             // Text identifier name for debugging
+    4096,                   // Stack size allocated to this task (4KB)
+    NULL,                   // Parameter input parameters
+    1,                      // Core priority level status (Low priority keeps web server fast)
+    NULL,                   // Task tracking handle
+    0                       // Pin this background task to Core 0 (Web server stays on Core 1)
+  );
+  Serial.println("FreeRTOS Asynchronous Pinger Thread Spawned!");
 
   Serial.println("end of void setup... Delaying 1 sec...");
   delay(1000);
@@ -850,8 +865,23 @@ void loop() {
     }
   }
 
+/* 
+This didnt work well
+  // Always process web requests first
+  server.handleClient();
 
-  server.handleClient();  // Processes web requests in milliseconds
+  // STRICT IF-GATE: Only run the ping engine if a user isn't loading the page
+  if (isUserLoadingWebPage == false) {
+    runNetworkPingScanner();
+  } else {
+    Serial.println("Ping skipped: Web server is currently busy transmitting!");
+  }
+*/
+
+// Process incoming web browser connections instantly without locking the CPU
+  server.handleClient();
+  
+  delay(1); // Crucial safety yield to prevent watchdog timer resets
 
   // --- DYNAMIC SLIDER-CONTROLLED BACKGROUND ENGINE WITH LIVE CLEANUP ---
   static unsigned long lastBleCycle = 0;
@@ -939,9 +969,9 @@ void loop() {
     lastBleCycle = currentMillis;
   }
 
-runNetworkPingScanner(); // Ping any defined IP address's 
+  // runNetworkPingScanner();  // Ping any defined IP address's
 
-delay(1);  // Small safety yield to prevent watchdog resets
+  delay(1);  // Small safety yield to prevent watchdog resets
 
 }  // end Void Loop
 
@@ -970,18 +1000,18 @@ if (request->hasArg("key")) {
   // Start building your HTML response string
   // --- START OF HTML WEB PAGE ---
   String html = "<!DOCTYPE html><html>";
-html += "<meta charset='UTF-8'>"; // 👈 allows  modern 4-byte Unicode characters (like emojis)to render
+  html += "<meta charset='UTF-8'>";  // 👈 allows  modern 4-byte Unicode characters (like emojis)to render
   html += "<head><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">";
   html += "<link rel=\"icon\" href=\"data:,\">";
 
   // Auto-refresh the page every 5 seconds to keep the BT list live
   html += "<script>";
-html += "setInterval(function() {";
-html += "  if (!sessionStorage.getItem('typing')) {";
-html += "    window.location.reload();";
-html += "  }";
-html += "}, 2000);"; // Refreshes every 2 seconds, but ONLY if you aren't typing
-html += "</script>";
+  html += "setInterval(function() {";
+  html += "  if (!sessionStorage.getItem('typing')) {";
+  html += "    window.location.reload();";
+  html += "  }";
+  html += "}, 2000);";  // Refreshes every 2 seconds, but ONLY if you aren't typing
+  html += "</script>";
 
   // Simple CSS styling for mobile-responsiveness
   html += "<style>html { font-family: Helvetica; display: inline-block; margin: 0px auto; text-align: center;}";
@@ -1047,7 +1077,7 @@ html += "</script>";
   html += "  </form>";
   html += "</div>";
 
- 
+
 
   // ==========================================
   //  SORT DEVICES BY RSSI (Strongest First)
@@ -1072,11 +1102,11 @@ html += "</script>";
   html += "<input type='submit' value='Update Window'>";
   html += "</form></div>";
 
- // ======================================================
+  // ======================================================
   // TABLE 1: ACTIVE BLUETOOTH TOKENS (SCANNER)
   // ======================================================
   html += "<h3>Active Bluetooth Tokens (RSSI > " + String(rssiThreshold) + " dBm)</h3>";
-  html += "<table border='1' align='center' style='margin-bottom: 30px; width: 95%; max-width: 700px;'>"; // Fixed width to 700px
+  html += "<table border='1' align='center' style='margin-bottom: 30px; width: 95%; max-width: 700px;'>";  // Fixed width to 700px
   html += "<tr><th>MAC Address</th><th>Device Info</th><th>RSSI</th><th>Last Seen</th><th>Total Duration</th><th>Action</th></tr>";
 
   int count = 0;
@@ -1085,27 +1115,27 @@ html += "</script>";
   for (int i = 0; i < deviceCount; i++) {
     if (currentMillis - discoveredDevices[i].lastSeen < ((unsigned long)presenceWindowSeconds * 1000)) {
       html += "<tr><td><code>" + discoveredDevices[i].macAddress + "</code></td>";
-      
+
       // NEW LOOKUP: Check if this MAC address has a custom friendly name saved in Table 2
       String activeAlias = "";
-      for(int k = 0; k < authDeviceCount; k++) {
-        if(authDevices[k].macAddress == discoveredDevices[i].macAddress) {
+      for (int k = 0; k < authDeviceCount; k++) {
+        if (authDevices[k].macAddress == discoveredDevices[i].macAddress) {
           activeAlias = authDevices[k].friendlyName;
         }
       }
 
       html += "<td>";
       // If a friendly name exists, print it as a purple badge above the device type
-      if(activeAlias != "") {
+      if (activeAlias != "") {
         html += "<b style='color:purple;'>[" + activeAlias + "]</b><br>";
       }
-      
+
       if (discoveredDevices[i].findMyFingerprint != "") {
         html += "<b>" + discoveredDevices[i].deviceType + "</b><br><small style='color:blue;'>Key: " + discoveredDevices[i].findMyFingerprint + "</small></td>";
       } else {
         html += discoveredDevices[i].deviceType + "</td>";
       }
-      
+
       html += "<td>" + String(discoveredDevices[i].rssi) + " dBm</td>";
 
       unsigned long lastSeenSec = (currentMillis - discoveredDevices[i].lastSeen) / 1000;
@@ -1114,7 +1144,7 @@ html += "</script>";
       unsigned long totalTimeSec = (currentMillis - discoveredDevices[i].firstSeen) / 1000;
       unsigned long mins = totalTimeSec / 60;
       unsigned long secs = totalTimeSec % 60;
-      
+
       html += "<td>";
       if (mins > 0) { html += String(mins) + "m "; }
       html += String(secs) + "s in range</td>";
@@ -1131,22 +1161,22 @@ html += "</script>";
   }
   html += "</table>";
 
-    // ======================================================
+  // ======================================================
   // UPDATED: SETTINGS CONFIGURATION FORM (Triple Value Constraints)
   // ======================================================
   html += "<div style='margin: 20px auto; width: 95%; max-width: 700px; text-align: center; border: 1px dashed #666; padding: 15px; background-color: #fff;'>";
   html += "<form action='/save-settings' method='POST'>";
-  
+
   html += "<div style='display: inline-block; margin: 5px 15px;'><b>Active Presence Window: </b>";
   html += "<input type='number' name='window' value='" + String(authTimeWindowSeconds) + "' style='width:60px; text-align:center;'> seconds</div>";
-  
+
   html += "<div style='display: inline-block; margin: 5px 15px;'><b>🔒 Fresh Arrival Trust: </b>";
   html += "<input type='number' name='arrival_limit' value='" + String(maxArrivalAgeSeconds) + "' style='width:60px; text-align:center;'> seconds</div>";
-  
+
   // NEW INPUT ROW FOR PING REFRESH RATE
   html += "<div style='display: inline-block; margin: 5px 15px;'><b>⚡ Network Ping Interval: </b>";
   html += "<input type='number' name='ping_interval' min='1' max='60' value='" + String(networkPingIntervalSeconds) + "' style='width:60px; text-align:center;'> seconds</div>";
-  
+
   html += "<div style='margin-top: 15px;'><input type='submit' value='Save All Settings' style='padding: 6px 20px; font-weight: bold; background-color: #333; color: white; border: none; cursor: pointer;'></div>";
   html += "</form></div>";
 
@@ -1160,20 +1190,20 @@ html += "</script>";
 
   html += "<hr style='width: 95%; max-width: 700px; margin: 20px auto;'>";
   html += "<h3>📱 Authorised iPhone Network Pinger (" + String(authIPCount) + "/" + String(MAX_AUTH_IPS) + ")</h3>";
-  
- // Interactive Entry Submission Form Block with Dynamic Auto-Refresh Freeze
+
+  // Interactive Entry Submission Form Block with Dynamic Auto-Refresh Freeze
   html += "<div style='margin: 10px auto; width: 95%; max-width: 700px; text-align: center; background:#eee; padding:8px;'>";
   html += "<form action='/add-ip' method='POST' style='margin:0;'>";
-  
+
   html += "Target IP: <b>" + subnetPrefix + "</b>"
-          "<input type='number' name='quad' min='1' max='254' placeholder='254' style='width:50px;' required "
-          "onfocus=\"sessionStorage.setItem('typing', 'true');\" "
-          "onblur=\"sessionStorage.removeItem('typing');\"> ";
-          
+                                            "<input type='number' name='quad' min='1' max='254' placeholder='254' style='width:50px;' required "
+                                            "onfocus=\"sessionStorage.setItem('typing', 'true');\" "
+                                            "onblur=\"sessionStorage.removeItem('typing');\"> ";
+
   html += "Name: <input type='text' name='name' placeholder=\"Tony's iPhone\" style='width:120px;' required "
           "onfocus=\"sessionStorage.setItem('typing', 'true');\" "
           "onblur=\"sessionStorage.removeItem('typing');\"> ";
-          
+
   html += "<input type='submit' value='+ Add Phone Key' style='background:#008CBA; color:white; border:none; padding:4px 10px; cursor:pointer;'>";
   html += "</form></div>";
 
@@ -1187,11 +1217,11 @@ html += "</script>";
       String fullTargetIP = subnetPrefix + String(authIPs[i].lastQuad);
       html += "<tr><td><b>" + authIPs[i].friendlyName + "</b></td>";
       html += "<td><code>" + fullTargetIP + "</code></td>";
-      
+
       // Ping Connectivity Indicator Check
       String pingIndicator = authIPs[i].isOnline ? "<span style='color:green;'>Connected 📶</span>" : "<span style='color:grey;'>Unreachable 💤</span>";
       html += "<td>" + pingIndicator + "</td>";
-      
+
       // Calculate Network Arrival Trust Bounds
       String ipVerificationState = "<span style='color:red; font-weight:bold;'>🔴 Expired</span>";
       if (authIPs[i].isOnline) {
@@ -1202,14 +1232,14 @@ html += "</script>";
           ipVerificationState = "<span style='color:orange; font-weight:bold;'>🟠 Expired (Static Home)</span>";
         }
       }
-      
+
       html += "<td>" + ipVerificationState + "</td>";
       html += "<td><a href='/remove-ip?index=" + String(i) + "'><button style='background-color:#f44336; color:white; border:none; padding:4px 8px; cursor:pointer;'>❌ Remove</button></a></td></tr>";
     }
   }
   html += "</table>";
 
-// ======================================================
+  // ======================================================
   // UPDATED: TABLE 2: NOMINATED AUTHORISED TOKENS (SECURITY DATABASE)
   // ======================================================
   html += "<hr style='width: 95%; max-width: 700px; margin: 20px auto;'>";
@@ -1223,26 +1253,26 @@ html += "</script>";
     for (int i = 0; i < authDeviceCount; i++) {
       html += "<tr><td><code>" + authDevices[i].macAddress + "</code></td>";
       html += "<td>" + authDevices[i].deviceType + "</td>";
-      
+
       // 1. INLINE FRIENDLY NAME FORM WITH AUTO-REFRESH FREEZE HOOKS
       html += "<td><form action='/update-bt-name' method='POST' style='margin:0;'>";
       html += "<input type='hidden' name='mac' value='" + authDevices[i].macAddress + "'>";
       html += "<input type='text' name='name' value='" + authDevices[i].friendlyName + "' style='width:110px;' "
-              "onfocus=\"sessionStorage.setItem('typing', 'true');\" "
-              "onblur=\"sessionStorage.removeItem('typing');\"> ";
+                                                                                       "onfocus=\"sessionStorage.setItem('typing', 'true');\" "
+                                                                                       "onblur=\"sessionStorage.removeItem('typing');\"> ";
       html += "<input type='submit' value='Set' style='font-size:10px; padding:2px;'>";
       html += "</form></td>";
-      
+
       // 2. CALCULATE VALID / EXPIRED STATUS STRATEGY
       String liveStatus = "<span style='color:red; font-weight:bold;'>🔴 Expired (Out of Range)</span>";
       for (int j = 0; j < deviceCount; j++) {
         if (discoveredDevices[j].macAddress == authDevices[i].macAddress) {
           unsigned long lastSeenDelta = (currentMillis - discoveredDevices[j].lastSeen) / 1000;
           unsigned long totalDurationSeconds = (currentMillis - discoveredDevices[j].firstSeen) / 1000;
-          
+
           bool isCurrentlyPresent = (lastSeenDelta <= (unsigned long)authTimeWindowSeconds);
           bool isFreshArrival = (totalDurationSeconds <= (unsigned long)maxArrivalAgeSeconds);
-          
+
           if (isCurrentlyPresent && isFreshArrival) {
             unsigned long remainingTrust = maxArrivalAgeSeconds - totalDurationSeconds;
             liveStatus = "<span style='color:green; font-weight:bold;'>🟢 Valid (" + String(remainingTrust) + "s trust left)</span>";
@@ -1254,16 +1284,16 @@ html += "</script>";
           break;
         }
       }
-      
+
       html += "<td>" + liveStatus + "</td>";
-      
+
       // DE-AUTHORISE ACTION BUTTON
       html += "<td><a href='/deauthorise?mac=" + authDevices[i].macAddress + "'><button style='background-color:#f44336; color:white; border:none; padding:4px 8px; cursor:pointer;'>❌ Revoke</button></a></td></tr>";
     }
   }
   html += "</table>";
-  
- // Old logging section
+
+  // Old logging section
 
   //Serial.println("about to write headers .");
   // 1. Explicitly display the table headers from your dedicated slots (60, 61, 62)
@@ -1293,8 +1323,15 @@ html += "</script>";
   // --- END OF HTML WEB PAGE ---
 
   // Instantly send the full page text to the browser non-blockingly
-  server.send(200, "text/html", html);
+  //server.send(200, "text/html", html);
 
+  // Right before you send the data, lock the gate
+  //isUserLoadingWebPage = true;
+
+  server.send(200, "text/html; charset=utf-8", html);
+
+  // Right after the data is safely sent, unlock the gate
+  //isUserLoadingWebPage = false;
 
 }  // end of handleroot
 
@@ -1512,6 +1549,7 @@ boolean connectWifi() {
     // if this is an issue, fix by locking mac address to ip address in the router config instead (not done as at June2026)
   }
   WiFi.begin(ssid, password);
+  WiFi.setSleep(false);
   Serial.println("");
   Serial.println("Connecting to WiFi Network");
 
@@ -1942,7 +1980,8 @@ void runNetworkPingScanner() {
   }
 }
 */
-
+/* 
+4th attempt
 void runNetworkPingScanner() {
   unsigned long currentMillis = millis();
   
@@ -1984,5 +2023,162 @@ void runNetworkPingScanner() {
         authIPs[i].isOnline = false;
       }
     }
+  }
+}
+*/
+/* 
+5th attempt
+void runNetworkPingScanner() {
+  unsigned long currentMillis = millis();
+  
+  // Dynamic User-Adjusted Interval Constraint (Default: 2 seconds)
+  if (currentMillis - lastPingTime >= ((unsigned long)networkPingIntervalSeconds * 1000)) {
+    lastPingTime = currentMillis;
+    
+    // 1. Fetch dynamic local configuration
+    IPAddress localIP = WiFi.localIP();
+    
+    // 2. CRITICAL ANTENNA FIX: Temporarily halt the Bluetooth scanning engine
+    // This immediately frees up the shared 2.4GHz antenna layer for Wi-Fi traffic.
+    if (pBLEScan != nullptr) {
+      pBLEScan->stop();
+    }
+    
+    // Allow the network driver stack 50 milliseconds to re-settle
+    delay(50); 
+    
+    for (int i = 0; i < authIPCount; i++) {
+      if (authIPs[i].lastQuad == 0) continue; 
+      
+      // Construct a clean, direct IPAddress structure
+      IPAddress targetIP(localIP[0], localIP[1], localIP[2], authIPs[i].lastQuad);
+      
+      Serial.print("Issuing antenna-isolated ping to: ");
+      Serial.println(targetIP);
+      
+      // Execute network call (Sends 1 packet with a fast response window)
+      if (Ping.ping(targetIP, 1)) {
+        Serial.println(" -> SUCCESS! Target device online.");
+        
+        if (!authIPs[i].isOnline || (currentMillis - authIPs[i].lastSeen > 60000)) {
+          authIPs[i].firstSeen = currentMillis;
+        }
+        authIPs[i].lastSeen = currentMillis;
+        authIPs[i].isOnline = true;
+      } else {
+        Serial.println(" -> FAILED! Host unreachable.");
+        authIPs[i].isOnline = false;
+      }
+    }
+
+    // 3. RESUME BLUETOOTH ENGINE: Hand the antenna back over to the BLE loop tracker
+    // Replace "3" with your current background Scan Slice/duration variable if it differs
+    if (pBLEScan != nullptr) {
+      pBLEScan->start(3, false); // Restarts non-blocking scans
+    }
+  }
+}
+*/
+/*
+6th? attempt
+void runNetworkPingScanner() {
+  unsigned long currentMillis = millis();
+
+  // Strict non-blocking constraint: Only execute if your interval has passed
+  if (currentMillis - lastPingTime >= ((unsigned long)networkPingIntervalSeconds * 1000)) {
+    lastPingTime = currentMillis;
+
+    IPAddress localIP = WiFi.localIP();
+    uint8_t myOwnLastQuad = localIP[3];  // Dynamically grabs the ESP32's last quad (e.g., 20)
+
+    // Temporarily pause BLE scans to clear the shared physical antenna
+    if (pBLEScan != nullptr) pBLEScan->stop();
+    delay(20);
+
+    for (int i = 0; i < authIPCount; i++) {
+      if (authIPs[i].lastQuad == 0) continue;
+
+      // Safety Override: Bypass self-pings entirely
+      if (authIPs[i].lastQuad == myOwnLastQuad) {
+        authIPs[i].lastSeen = currentMillis;
+        authIPs[i].isOnline = true;
+        continue;
+      }
+
+      // Assemble standard target destination properties
+      IPAddress targetIP(localIP[0], localIP[1], localIP[2], authIPs[i].lastQuad);
+
+      Serial.print("Issuing non-blocking ping to: ");
+      Serial.println(targetIP);
+
+      // Send 2 packet with a fast response window
+      if (Ping.ping(targetIP, 2)) {
+        Serial.println(" -> SUCCESS! Target device online.");
+        if (!authIPs[i].isOnline || (currentMillis - authIPs[i].lastSeen > 60000)) {
+          authIPs[i].firstSeen = currentMillis;
+        }
+        authIPs[i].lastSeen = currentMillis;
+        authIPs[i].isOnline = true;
+      } else {
+        Serial.println(" -> FAILED! Host unreachable.");
+        authIPs[i].isOnline = false;
+      }
+    }
+
+    // Resume Bluetooth tracking safely
+    if (pBLEScan != nullptr) pBLEScan->start(3, false);
+  }
+}
+
+*/
+
+// --- FreeRTOS Independent Task Engine For Network Pings ---
+void networkPingTaskEngine(void * parameter) {
+  // Give the ESP32 5 seconds to complete Wi-Fi and startup tasks before beginning
+  vTaskDelay(pdMS_TO_TICKS(5000)); 
+  
+  while(true) {
+    // 1. Double check connectivity bounds before issuing packets
+    if (WiFi.status() == WL_CONNECTED && authIPCount > 0) {
+      IPAddress localIP = WiFi.localIP();
+      uint8_t myOwnLastQuad = localIP[3]; // Dynamically identify self IP quad
+      
+      // 2. Clear the 2.4GHz antenna layer by stopping BLE scans briefly
+      if (pBLEScan != nullptr) pBLEScan->stop();
+      vTaskDelay(pdMS_TO_TICKS(30)); // Safe task pause
+      
+      for (int i = 0; i < authIPCount; i++) {
+        if (authIPs[i].lastQuad == 0) continue;
+        
+        // Skip over loopback checks to prevent self-recursive calls
+        if (authIPs[i].lastQuad == myOwnLastQuad) {
+          authIPs[i].lastSeen = millis();
+          authIPs[i].isOnline = true;
+          continue;
+        }
+        
+        // Construct target address structure safely
+        IPAddress targetIP(localIP[0], localIP[1], localIP[2], authIPs[i].lastQuad);
+        
+        // Execute network check (Sends 2 packets with an explicit timeout)
+        if (Ping.ping(targetIP, 2)) {
+          if (!authIPs[i].isOnline || (millis() - authIPs[i].lastSeen > 60000)) {
+            authIPs[i].firstSeen = millis();
+          }
+          authIPs[i].lastSeen = millis();
+          authIPs[i].isOnline = true;
+        } else {
+          authIPs[i].isOnline = false;
+        }
+      }
+      
+      // 3. Hand control back over to the Bluetooth scanner engine
+      if (pBLEScan != nullptr) pBLEScan->start(3, false);
+    }
+    
+    // 4. DYNAMIC DELAY CONTROLLER: Pauses the background thread based on user settings
+    int delaySeconds = networkPingIntervalSeconds;
+    if (delaySeconds < 1) delaySeconds = 1;
+    vTaskDelay(pdMS_TO_TICKS(delaySeconds * 1000));
   }
 }
