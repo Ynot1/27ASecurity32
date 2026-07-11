@@ -20,8 +20,11 @@ int scanSliceDuration = 3;       // Scanning duration slice in seconds
 
 #define SCAN_TIME 2
 
+
+
 BLEScan* pBLEScan;
 
+// Structure for Bluetooth devices
 struct TrackedBeacon {
   String macAddress;
   int rssi;
@@ -31,7 +34,25 @@ struct TrackedBeacon {
   String findMyFingerprint;  // <- Holds the fixed unique identifier payload
 };
 
+// Structure for Authorised Tokens
+struct AuthorisedDevice {
+  String macAddress;
+  String deviceType;
+  String friendlyName;  // 👈 NEW: Customizable friendly alias
+};
 
+// --- NEW: IPHONE IP AUTHENTICATION STRUCTURE ---
+struct AuthorisedIP {
+  uint8_t lastQuad;             // Only storing the 4th quad (0-255)
+  String friendlyName;          // "Tony's iPhone"
+  unsigned long firstSeen = 0;  // Reset when it joins, tracks fresh arrival
+  unsigned long lastSeen = 0;   // Updated on every successful ICMP response
+  bool isOnline = false;        // Real-time ping state tracker
+};
+
+#define MAX_AUTH_DEVICES 10
+AuthorisedDevice authDevices[MAX_AUTH_DEVICES];
+int authDeviceCount = 0;
 
 const int MAX_DEVICES = 30;
 TrackedBeacon discoveredDevices[MAX_DEVICES];
@@ -205,12 +226,7 @@ class MyAdvertisedDeviceCallbacks : public BLEAdvertisedDeviceCallbacks {
       manufacturer = IdentifyManufacturer(currentMac);
     }
 
-    // ==========================================
-    // 5. MASTER TRACKING MEMORY ENGINE
-    // ==========================================
-    unsigned long now = millis();
-    bool found = false;
-
+/*
     for (int i = 0; i < deviceCount; i++) {
       if ((payloadSignature != "" && discoveredDevices[i].findMyFingerprint == payloadSignature) || (payloadSignature == "" && discoveredDevices[i].macAddress == currentMac)) {
 
@@ -221,7 +237,118 @@ class MyAdvertisedDeviceCallbacks : public BLEAdvertisedDeviceCallbacks {
         discoveredDevices[i].macAddress = currentMac;
         discoveredDevices[i].rssi = currentRssi;
         discoveredDevices[i].lastSeen = now;
+
+
+*/
+/*
+    for (int i = 0; i < deviceCount; i++) {
+      if ((payloadSignature != "" && discoveredDevices[i].findMyFingerprint == payloadSignature) || 
+          (payloadSignature == "" && discoveredDevices[i].macAddress == currentMac)) {
+        
+        // EDGE DETECTION: If it's been gone/unseen for longer than your presence threshold
+        if (now - discoveredDevices[i].lastSeen > ((unsigned long)presenceWindowSeconds * 1000)) {
+          discoveredDevices[i].firstSeen = now;
+          
+          // Cross-reference against your authorised list to pull its friendly name
+          for(int k=0; k<authDeviceCount; k++) {
+            if(authDevices[k].macAddress == currentMac) {
+              String nameToLog = authDevices[k].friendlyName == "" ? "Unassigned Tile" : authDevices[k].friendlyName;
+              triggerSecurityGate(nameToLog); // Open the Alexa gate!
+            }
+          }
+        }
+
+        discoveredDevices[i].macAddress = currentMac; 
+        discoveredDevices[i].rssi = currentRssi;
+        discoveredDevices[i].lastSeen = now;
+        // ... rest of your tracker updates ...
         discoveredDevices[i].deviceType = manufacturer;
+        found = true;
+        break;
+      }
+    }
+*/
+/* 
+    // ========================================================
+    // UPDATED: MASTER TRACKING MEMORY ENGINE WITH MULTI-SOURCE GATE TRIGGER
+    // ========================================================
+    unsigned long now = millis();
+    bool found = false;
+    
+    for (int i = 0; i < deviceCount; i++) {
+      if ((payloadSignature != "" && discoveredDevices[i].findMyFingerprint == payloadSignature) || 
+          (payloadSignature == "" && discoveredDevices[i].macAddress == currentMac)) {
+        
+        // 1. CALCULATE EDGE-DETECTION: Has this token been gone/unseen for a while?
+        unsigned long timeSinceLastSeen = now - discoveredDevices[i].lastSeen;
+        
+        if (timeSinceLastSeen > ((unsigned long)presenceWindowSeconds * 1000)) {
+          // It was stale or gone, reset arrival cycle markers
+          discoveredDevices[i].firstSeen = now;
+          
+          // 2. CHECK AUTHORISATION STATUS: Is this newly-returned MAC allowed?
+          for (int k = 0; k < authDeviceCount; k++) {
+            if (authDevices[k].macAddress == currentMac) {
+              String nameToLog = authDevices[k].friendlyName;
+              if (nameToLog == "") nameToLog = "Authorized Bluetooth Key";
+              
+              // ⚡ CRITICAL TRIPPED HANDSHAKE: Open the voice gate!
+              triggerSecurityGate(nameToLog); 
+            }
+          }
+        }
+
+        // Keep standard trace trackers updated
+        discoveredDevices[i].macAddress = currentMac; 
+        discoveredDevices[i].rssi = currentRssi;
+        discoveredDevices[i].lastSeen = now;
+        discoveredDevices[i].deviceType = manufacturer; 
+        found = true;
+        break;
+      }
+    }
+*/
+
+    // ========================================================
+    // ULTIMATE FIX: MULTI-SOURCE GAP EDGE DETECTION (TILE AND BEACONS)
+    // ========================================================
+    unsigned long now = millis();
+    bool found = false;
+    
+    for (int i = 0; i < deviceCount; i++) {
+      if ((payloadSignature != "" && discoveredDevices[i].findMyFingerprint == payloadSignature) || 
+          (payloadSignature == "" && discoveredDevices[i].macAddress == currentMac)) {
+        
+        // 1. CALCULATE SEPARATION GAP: Time elapsed since the ESP32 last processed this token
+        unsigned long timeSinceLastSeen = now - discoveredDevices[i].lastSeen;
+        
+        // 2. BOOTSTRAP TRIGGER STRATEGY:
+        // A) If 'firstSeen' equals 'lastSeen', it means the device has NEVER tripped the gate since boot.
+        // B) If 'timeSinceLastSeen' is greater than your window, it has physically arrived from outside.
+        bool isBrandNewBootCapture = (discoveredDevices[i].firstSeen == discoveredDevices[i].lastSeen);
+        bool isFreshArrivalGapPassed = (timeSinceLastSeen > ((unsigned long)presenceWindowSeconds * 1000));
+        
+        if (isBrandNewBootCapture || isFreshArrivalGapPassed) {
+          // Reset arrival timestamps to frame this fresh session anchor
+          discoveredDevices[i].firstSeen = now;
+          
+          // Cross-reference against your authorized settings list to grab its friendly label
+          for (int k = 0; k < authDeviceCount; k++) {
+            if (authDevices[k].macAddress == currentMac) {
+              String nameToLog = authDevices[k].friendlyName;
+              if (nameToLog == "") nameToLog = "Authorized Bluetooth Key";
+              
+              // ⚡ THE GATE OPENER: Open the voice gate instantly!
+              triggerSecurityGate(nameToLog); 
+            }
+          }
+        }
+
+        // Keep core running metrics updated
+        discoveredDevices[i].macAddress = currentMac; 
+        discoveredDevices[i].rssi = currentRssi;
+        discoveredDevices[i].lastSeen = now;
+        discoveredDevices[i].deviceType = manufacturer; 
         found = true;
         break;
       }
@@ -237,19 +364,7 @@ class MyAdvertisedDeviceCallbacks : public BLEAdvertisedDeviceCallbacks {
       deviceCount++;
     }
   }
-};
-
-// Structure for Authorised Tokens
-struct AuthorisedDevice {
-  String macAddress;
-  String deviceType;
-  String friendlyName;  // 👈 NEW: Customizable friendly alias
-};
-
-
-#define MAX_AUTH_DEVICES 10
-AuthorisedDevice authDevices[MAX_AUTH_DEVICES];
-int authDeviceCount = 0;
+}; // end of class MyAdvertisedDeviceCallbacks 
 
 // Adjustable 2FA validation window via web interface (Default: 30 seconds)
 // Global settings configurations
@@ -274,21 +389,19 @@ bool isAuthorisedTokenPresent() {
   return false;
 }
 
-// --- NEW: IPHONE IP AUTHENTICATION STRUCTURE ---
-struct AuthorisedIP {
-  uint8_t lastQuad;             // Only storing the 4th quad (0-255)
-  String friendlyName;          // "Tony's iPhone"
-  unsigned long firstSeen = 0;  // Reset when it joins, tracks fresh arrival
-  unsigned long lastSeen = 0;   // Updated on every successful ICMP response
-  bool isOnline = false;        // Real-time ping state tracker
-};
+
 
 #define MAX_AUTH_IPS 10
 AuthorisedIP authIPs[MAX_AUTH_IPS];
 int authIPCount = 0;
 
+// --- MASTER VOICE-GATE AUTHORISATION FLAGS ---
+bool securitySystemDisableAuthorised = false;  // The master boolean flag for your Alexa gate
+String authorisingDeviceNames = "";            // Holds concatenated names (e.g., "Tony's Phone + Keys")
+unsigned long gateActivationTime = 0;          // Tracks exactly when the fresh arrival triggered
 
-//bool isUserLoadingWebPage = false;  // Tracks if the server is actively transmitting HTML
+// User-adjustable time window that the gate stays OPEN (Default: 60 seconds)
+int voiceGateOpenDurationSeconds = 60; 
 
 // prototypes
 boolean connectWifi();  // router handed out 192.168.1.169 for this initially
@@ -631,6 +744,9 @@ void setup() {
     if (server.hasArg("ping_interval")) {  // 👈 NEW: Capture ping slider/number field
       networkPingIntervalSeconds = server.arg("ping_interval").toInt();
       if (networkPingIntervalSeconds < 1) networkPingIntervalSeconds = 1;  // Safety floor
+    }
+    if (server.hasArg("gate_duration")) { // 👈 NEW: Capture Alexa open window duration
+      voiceGateOpenDurationSeconds = server.arg("gate_duration").toInt();
     }
     server.sendHeader("Location", "/");
     server.send(303);
@@ -996,7 +1112,8 @@ if (request->hasArg("key")) {
   Serial.println("No 'key' argument found in URL");
 }
 */
-
+/* 
+new head statemnet provided 
   // Start building your HTML response string
   // --- START OF HTML WEB PAGE ---
   String html = "<!DOCTYPE html><html>";
@@ -1022,6 +1139,46 @@ if (request->hasArg("key")) {
   // Web Page Heading
   html += "<body><h1>27A Security Interface Log</h1>";
 
+  */
+
+  // Start building your HTML response string
+  // --- START OF HTML WEB PAGE ---
+  String html = "<!DOCTYPE html>\n<html>\n<head>\n";
+  html += "<meta charset='UTF-8'>"; // Crucial for emojis inside the header
+  html += "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">";
+  html += "<link rel=\"icon\" href=\"data:,\">";
+  html += "<title>Security Access Hub</title>";
+
+  // ======================================================
+  // ⚡ FIXED: UN-STUCK AUTOMATIC AUTO-REFRESH ENGINE
+  // ======================================================
+  html += "<script>";
+  // Safety override: Wipes old stuck input locks whenever the page actually updates
+  html += "if (window.performance && window.performance.navigation.type === 0) {";
+  html += "  sessionStorage.removeItem('typing');";
+  html += "}";
+  
+  // Execution loop constraint: Reload page every 2000ms if not typing
+  html += "setInterval(function() {";
+  html += "  var isTypingActive = sessionStorage.getItem('typing');";
+  html += "  if (isTypingActive === null || isTypingActive === 'false') {";
+  html += "    window.location.reload();";
+  html += "  }";
+  html += "}, 2000);"; 
+  html += "</script>";
+
+  // ======================================================
+  // RETAINED: YOUR RENDER STYLING (MOBILE CSS LAYOUT)
+  // ======================================================
+  html += "<style>html { font-family: Helvetica; display: inline-block; margin: 0px auto; text-align: center;}";
+  html += ".button { background-color: #4CAF50; border: none; color: white; padding: 16px 40px;";
+  html += "text-decoration: none; font-size: 30px; margin: 2px; cursor: pointer;}";
+  html += ".button2 {background-color: #555555;}</style>\n</head>\n";
+  
+  html += "<body style='background:#f4f4f4; margin:10px;'>";
+
+  html += "<body><h1>27A Security Interface </h1>";
+
   // Display date
   html += "<p>Current Date is " + String(currentday) + " / " + String(currentmonth) + "</p>";
 
@@ -1039,6 +1196,38 @@ if (request->hasArg("key")) {
   } else {
     html += "<p><a href=\"/L\"><button class=\"button button2\">TURN OFF</button></a></p>";
   }
+// ======================================================
+  // LIVE ALEXA DISARM GATE STATUS BANNER
+  // ======================================================
+  unsigned long now = millis();
+  String bannerHtml = "";
+  
+  // Enforce clock validation to dynamically drop the flag if time has run out
+  if (securitySystemDisableAuthorised) {
+    unsigned long timeElapsed = (now - gateActivationTime) / 1000;
+    if (timeElapsed >= (unsigned long)voiceGateOpenDurationSeconds) {
+      // Time expired: Cleanly close the system gate back down
+      securitySystemDisableAuthorised = false;
+      authorisingDeviceNames = "";
+    }
+  }
+
+  // Draw the resulting conditional interface boxes
+  if (securitySystemDisableAuthorised) {
+    unsigned long remainingTime = voiceGateOpenDurationSeconds - ((now - gateActivationTime) / 1000);
+    bannerHtml += "<div style='margin: 15px auto; width: 95%; max-width: 700px; background-color: #d4edda; border: 2px solid #c3e6cb; color: #155724; padding: 15px; text-align: center; border-radius: 5px;'>";
+    bannerHtml += "<h2 style='margin: 0 0 5px 0;'>🔓 Alexa Disarm Gate: OPEN</h2>";
+    bannerHtml += "Authorized by: <b style='text-decoration: underline; color: #0b2e13;'>" + authorisingDeviceNames + "</b><br>";
+    bannerHtml += "<span style='font-size: 14px; font-weight: bold;'>Window expires in: <span style='color:red; font-size:18px;'>" + String(remainingTime) + "</span> seconds</span>";
+    bannerHtml += "</div>";
+  } else {
+    bannerHtml += "<div style='margin: 15px auto; width: 95%; max-width: 700px; background-color: #f8d7da; border: 1px solid #f5c6cb; color: #721c24; padding: 10px; text-align: center; border-radius: 5px;'>";
+    bannerHtml += "<h3 style='margin: 0;'>🔒 Alexa Disarm Gate: LOCKED</h3>";
+    bannerHtml += "<small style='color: #666;'>Bring a verified arrival token into proximity to authorize system overrides.</small>";
+    bannerHtml += "</div>";
+  }
+  
+  html += bannerHtml;
 
   //Display Alarm set/Unset State
 
@@ -1050,6 +1239,9 @@ if (request->hasArg("key")) {
     html += "<p>Alarm Panel Status: <strong> SET (enabled/on) </strong></p>";
     html += "<p><a href=\"UNSET\"><button class=\"button button2\">UnSET Alarm</button></a></p>";
   }
+
+  /* 
+  change from sliders to inpt boxes 
   // --- STREAMLINED FILTER CONTROLLER BOX ---
   html += "<div style='text-align: center; margin: 10px auto; padding: 10px; width: 90%; max-width: 380px; border: 1px solid #bbb; border-radius: 6px; font-size: 0.9em; background-color: #f9f9f9;'>";
   html += "  <h5 style='margin: 0 0 8px 0;'>Radio & Filter Tweaks</h5>";
@@ -1077,7 +1269,40 @@ if (request->hasArg("key")) {
   html += "  </form>";
   html += "</div>";
 
+*/
 
+// --- STREAMLINED FILTER CONTROLLER BOX (CONVERTED TO TEXT ENTRY WITH FREEZE HOOKS) ---
+  html += "<div style='text-align: center; margin: 10px auto; padding: 10px; width: 90%; max-width: 380px; border: 1px solid #bbb; border-radius: 6px; font-size: 0.9em; background-color: #f9f9f9;'>";
+  html += "  <h5 style='margin: 0 0 8px 0;'>Radio & Filter Tweaks</h5>";
+  html += "  <form action='/setRadioParams' method='GET'>";
+
+  // Input 1: RSSI Sensitivity
+  html += "    <div style='margin-bottom: 8px;'>";
+  html += "      <label style='display:inline-block; width:140px; text-align:right; margin-right:10px;'>RSSI Gate (dBm):</label>";
+  html += "      <input type='number' name='rssi' min='-100' max='-10' step='1' value='" + String(rssiThreshold) + "' style='width: 60px; text-align: center;' "
+          "onfocus=\"sessionStorage.setItem('typing', 'true');\" "
+          "onblur=\"sessionStorage.removeItem('typing');\">";
+  html += "    </div>";
+
+  // Input 2: Detection Window Timeout
+  html += "    <div style='margin-bottom: 8px;'>";
+  html += "      <label style='display:inline-block; width:140px; text-align:right; margin-right:10px;'>Keep-Alive Window:</label>";
+  html += "      <input type='number' name='window' min='10' max='300' step='5' value='" + String(presenceWindowSeconds) + "' style='width: 60px; text-align: center;' "
+          "onfocus=\"sessionStorage.setItem('typing', 'true');\" "
+          "onblur=\"sessionStorage.removeItem('typing');\"> s";
+  html += "    </div>";
+
+  // Input 3: Scan Slice Duration
+  html += "    <div style='margin-bottom: 12px;'>";
+  html += "      <label style='display:inline-block; width:140px; text-align:right; margin-right:10px;'>Scan Slice:</label>";
+  html += "      <input type='number' name='scantime' min='1' max='10' step='1' value='" + String(scanSliceDuration) + "' style='width: 60px; text-align: center;' "
+          "onfocus=\"sessionStorage.setItem('typing', 'true');\" "
+          "onblur=\"sessionStorage.removeItem('typing');\"> s";
+  html += "    </div>";
+
+  html += "    <input type='submit' class='buttonsmall' style='padding: 4px 15px; font-size: 0.85em; cursor: pointer;' value='Apply Changes'>";
+  html += "  </form>";
+  html += "</div>";
 
   // ==========================================
   //  SORT DEVICES BY RSSI (Strongest First)
@@ -1161,6 +1386,7 @@ if (request->hasArg("key")) {
   }
   html += "</table>";
 
+/*
   // ======================================================
   // UPDATED: SETTINGS CONFIGURATION FORM (Triple Value Constraints)
   // ======================================================
@@ -1180,6 +1406,58 @@ if (request->hasArg("key")) {
   html += "<div style='margin-top: 15px;'><input type='submit' value='Save All Settings' style='padding: 6px 20px; font-weight: bold; background-color: #333; color: white; border: none; cursor: pointer;'></div>";
   html += "</form></div>";
 
+*/
+/* 
+changed to allow easy filling
+  // ======================================================
+  // UPDATED: SETTINGS CONFIGURATION FORM (Quad Constraints)
+  // ======================================================
+  html += "<div style='margin: 20px auto; width: 95%; max-width: 700px; text-align: center; border: 1px dashed #666; padding: 15px; background-color: #fff;'>";
+  html += "<form action='/save-settings' method='POST'>";
+  
+  html += "<div style='display: inline-block; margin: 5px 10px;'><b>Active Presence: </b><input type='number' name='window' value='" + String(authTimeWindowSeconds) + "' style='width:50px; text-align:center;'>s</div>";
+  html += "<div style='display: inline-block; margin: 5px 10px;'><b>🔒 Fresh Arrival: </b><input type='number' name='arrival_limit' value='" + String(maxArrivalAgeSeconds) + "' style='width:50px; text-align:center;'>s</div>";
+  html += "<div style='display: inline-block; margin: 5px 10px;'><b>⚡ Ping Interval: </b><input type='number' name='ping_interval' value='" + String(networkPingIntervalSeconds) + "' style='width:50px; text-align:center;'>s</div>";
+  
+  // NEW FIELD: ALEXA GATE OPEN WINDOW
+  html += "<div style='display: inline-block; margin: 5px 10px;'><b>🎙️ Voice Gate Open: </b><input type='number' name='gate_duration' value='" + String(voiceGateOpenDurationSeconds) + "' style='width:50px; text-align:center;'>s</div>";
+  
+  html += "<div style='margin-top: 15px;'><input type='submit' value='Save All Settings' style='padding: 6px 20px; font-weight: bold; background-color: #333; color: white; border: none; cursor: pointer;'></div>";
+  html += "</form></div>";
+  */
+
+    // ======================================================
+  // UPDATED: SETTINGS CONFIGURATION FORM (FREEZE-SAFE OVERRIDES)
+  // ======================================================
+  html += "<div style='margin: 20px auto; width: 95%; max-width: 700px; text-align: center; border: 1px dashed #666; padding: 15px; background-color: #fff;'>";
+  html += "<form action='/save-settings' method='POST'>";
+  
+  // 1. ACTIVE PRESENCE FIELD
+  html += "<div style='display: inline-block; margin: 5px 10px;'><b>Active Presence: </b>"
+          "<input type='number' name='window' value='" + String(authTimeWindowSeconds) + "' style='width:50px; text-align:center;' "
+          "onfocus=\"sessionStorage.setItem('typing', 'true');\" "
+          "onblur=\"sessionStorage.removeItem('typing');\">s</div>";
+  
+  // 2. FRESH ARRIVAL FIELD
+  html += "<div style='display: inline-block; margin: 5px 10px;'><b>🔒 Fresh Arrival: </b>"
+          "<input type='number' name='arrival_limit' value='" + String(maxArrivalAgeSeconds) + "' style='width:50px; text-align:center;' "
+          "onfocus=\"sessionStorage.setItem('typing', 'true');\" "
+          "onblur=\"sessionStorage.removeItem('typing');\">s</div>";
+  
+  // 3. PING INTERVAL FIELD
+  html += "<div style='display: inline-block; margin: 5px 10px;'><b>⚡ Ping Interval: </b>"
+          "<input type='number' name='ping_interval' value='" + String(networkPingIntervalSeconds) + "' style='width:50px; text-align:center;' "
+          "onfocus=\"sessionStorage.setItem('typing', 'true');\" "
+          "onblur=\"sessionStorage.removeItem('typing');\">s</div>";
+  
+  // 4. VOICE GATE OPEN FIELD
+  html += "<div style='display: inline-block; margin: 5px 10px;'><b>🎙️ Voice Gate Open: </b>"
+          "<input type='number' name='gate_duration' value='" + String(voiceGateOpenDurationSeconds) + "' style='width:50px; text-align:center;' "
+          "onfocus=\"sessionStorage.setItem('typing', 'true');\" "
+          "onblur=\"sessionStorage.removeItem('typing');\">s</div>";
+  
+  html += "<div style='margin-top: 15px;'><input type='submit' value='Save All Settings' style='padding: 6px 20px; font-weight: bold; background-color: #333; color: white; border: none; cursor: pointer;'></div>";
+  html += "</form></div>";
 
 
   // ======================================================
@@ -1359,6 +1637,8 @@ bool Sec27ASetOn() {
       Serial.write(rel1ON, sizeof(rel1ON));
       delay(10);
       Serial.println("Turning Relay#1 On ...");
+    ProxyRequestText = "Authorised Keys found " + authorisingDeviceNames ;
+    RotateProxyLogArray();
       ProxyRequestText = "Set Request Honored";
       RotateProxyLogArray();
 
@@ -1412,6 +1692,14 @@ bool Sec27AUnsetOn() {
   RotateProxyLogArray();
 
   if (Sec27ASetState == LOW) {  // only pulse relay if Burglar Alarm is currently Set
+    /* need to gate this with ****. if (securitySystemDisableAuthorised == true) {
+      securitySystemDisableAuthorised = false; 
+  } else {
+    alexaSpeak("Access denied. No fresh physical authentication tokens detected at the entrance.");
+  }
+
+  Also need to log this sting along with the event "authorisingDeviceNames"
+  */
     Serial.println("XXX Pulsing Relay on ...");
     // AlarmSetLockout = LOW; // reset the lockout for the turn on function
     // this in asymetric and doesnt have a lockout for preventing multiple offs like the on function
@@ -1424,7 +1712,9 @@ bool Sec27AUnsetOn() {
     Serial.write(rel1ON, sizeof(rel1ON));
     delay(10);
     Serial.println("Turning Relay#1 On ...");
-    ProxyRequestText = "UnSet Request Honored";
+    ProxyRequestText = "Authorised Keys found " + authorisingDeviceNames ;
+    RotateProxyLogArray();
+    ProxyRequestText = "UnSet Request Honored ";
     RotateProxyLogArray();
 
     // Turn on #1 Relay
@@ -2161,8 +2451,10 @@ void networkPingTaskEngine(void * parameter) {
         IPAddress targetIP(localIP[0], localIP[1], localIP[2], authIPs[i].lastQuad);
         
         // Execute network check (Sends 2 packets with an explicit timeout)
-        if (Ping.ping(targetIP, 2)) {
-          if (!authIPs[i].isOnline || (millis() - authIPs[i].lastSeen > 60000)) {
+    if (Ping.ping(targetIP, 2)) {
+          // TRIPPED EDGE DETECTION: If it was previously offline, it has JUST arrived!
+          if (!authIPs[i].isOnline) {
+            triggerSecurityGate(authIPs[i].friendlyName); // Open the Alexa gate!
             authIPs[i].firstSeen = millis();
           }
           authIPs[i].lastSeen = millis();
@@ -2181,4 +2473,23 @@ void networkPingTaskEngine(void * parameter) {
     if (delaySeconds < 1) delaySeconds = 1;
     vTaskDelay(pdMS_TO_TICKS(delaySeconds * 1000));
   }
+}
+
+void triggerSecurityGate(String newlyArrivedName) {
+  unsigned long now = millis();
+  
+  // If the gate is already open, concatenate the new name safely with " + "
+  if (securitySystemDisableAuthorised && (now - gateActivationTime < ((unsigned long)voiceGateOpenDurationSeconds * 1000))) {
+    if (authorisingDeviceNames.indexOf(newlyArrivedName) == -1) { // Prevent duplicates
+      authorisingDeviceNames += " + " + newlyArrivedName;
+    }
+  } else {
+    // Fresh standalone trigger window opening
+    securitySystemDisableAuthorised = true;
+    authorisingDeviceNames = newlyArrivedName;
+  }
+  
+  gateActivationTime = now; // Lock in or extend the countdown timer
+  Serial.print("🔒 VOICE SECURITY GATE TRIPPED BY: ");
+  Serial.println(authorisingDeviceNames);
 }
