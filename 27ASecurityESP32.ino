@@ -8,6 +8,15 @@
 #include <ESPping.h>
 #include <Preferences.h>
 Preferences prefs;  // Instantiate the permanent storage core instance
+#include <ArduinoOTA.h>
+#include <BLEDevice.h>
+#include <BLEUtils.h>
+#include <BLEScan.h>
+#include <BLEAdvertisedDevice.h>
+
+// Handle non-blocking timing loop for the OTA background processor
+unsigned long lastOtaCheck = 0;
+const unsigned long otaInterval = 50; // Check for incoming code updates every 50ms
 
 // Bluetooth section
 
@@ -15,12 +24,8 @@ int rssiThreshold = -90;         // Predefined threshold in dBm (closer to 0 is 
 int presenceWindowSeconds = 60;  // How long to remember a bluetooth device
 int scanSliceDuration = 3;       // Scanning duration slice in seconds
 
-#include <BLEDevice.h>
-#include <BLEUtils.h>
-#include <BLEScan.h>
-#include <BLEAdvertisedDevice.h>
-
 #define SCAN_TIME 2
+
 
 BLEScan* pBLEScan;
 
@@ -870,6 +875,9 @@ void setup() {
   );
   //Serial.println(F("FreeRTOS Asynchronous Pinger Thread Spawned!"));
 
+
+SetupWirelessOTA(); // Initialize your brand new wireless update channels
+
   Serial.println(F("end of void setup... Delaying 1 sec..."));
   delay(1000);
 
@@ -1112,8 +1120,15 @@ void loop() {
 
     lastBleCycle = currentMillis;
   }
+/*
+  // Light weight non-blocking OTA execution handle loop
+  if (millis() - lastOtaCheck >= otaInterval) {
+    ArduinoOTA.handle(); // Checks the Wi-Fi card for any incoming update binaries
+    lastOtaCheck = millis();
+  }
+*/
 
-  // runNetworkPingScanner();  // Ping any defined IP address's
+ArduinoOTA.handle(); // Checks the Wi-Fi card for any incoming update binaries
 
   delay(1);  // Small safety yield to prevent watchdog resets
 
@@ -2154,6 +2169,41 @@ void triggerSecurityGate(String newlyArrivedName, String deviceMac) {
   }
 
   gateActivationTime = now;  // Update the clock
-  Serial.print("🔒 VOICE SECURITY GATE ACTIVE: ");
+  //Serial.print("🔒 VOICE SECURITY GATE ACTIVE: ");
   //Serial.println(authorisingDeviceNames);
+}
+
+void SetupWirelessOTA() {
+  // Set the network name that will show up in your Arduino IDE Ports list
+  ArduinoOTA.setHostname("SecurityGateway-C3");
+
+  // Authentication Password (highly recommended for a home security gateway!)
+  ArduinoOTA.setPassword("TonySecurePass123");
+
+  // Display operational updates directly inside your serial logs
+  ArduinoOTA.onStart([]() {
+    String type = (ArduinoOTA.getCommand() == U_FLASH) ? "sketch" : "filesystem";
+    Serial.println("\n--- OTA ALERT: Wireless Update Started ---");
+    Serial.println("Updating " + type);
+
+    // CRITICAL: Kill the Bluetooth background radio instantly to free up 100% 
+    // of the antenna bandwidth for the incoming Wi-Fi upload!
+    if (pBLEScan) {
+      pBLEScan->stop();
+      Serial.println("System Handle: BLE Scanner Paused for fast Wi-Fi download.");
+    }
+  });
+
+  ArduinoOTA.onError([](ota_error_t error) {
+    Serial.printf("OTA Error [%u]\n", error);
+    
+    // FALLBACK: If the download fails, restart the Bluetooth scanner automatically
+    if (pBLEScan) {
+      pBLEScan->start(scanSliceDuration, nullptr, false);
+    }
+  });
+
+  // Launch the background wireless network listeners
+  ArduinoOTA.begin();
+  Serial.println("System Alert: Wireless OTA Network Listeners Active.");
 }
