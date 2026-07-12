@@ -7,7 +7,7 @@
 #include "CallbackFunction.h"
 #include <ESPping.h>
 #include <Preferences.h>
-Preferences prefs; // Instantiate the permanent storage core instance
+Preferences prefs;  // Instantiate the permanent storage core instance
 
 // Bluetooth section
 
@@ -21,8 +21,6 @@ int scanSliceDuration = 3;       // Scanning duration slice in seconds
 #include <BLEAdvertisedDevice.h>
 
 #define SCAN_TIME 2
-
-
 
 BLEScan* pBLEScan;
 
@@ -81,7 +79,7 @@ int maxArrivalAgeSeconds = 300;
 unsigned long lastPingTime = 0;      // Tracks non-blocking network thread cycles
 int networkPingIntervalSeconds = 2;  // 👈 NEW: User-adjustable ping delay (Default: 2s)
 
-// ****** GLOBAL FUNCTIONS & Classes 
+// ****** GLOBAL FUNCTIONS & Classes
 
 String IdentifyManufacturer(String macAddress) {
   macAddress.toUpperCase();
@@ -251,89 +249,6 @@ class MyAdvertisedDeviceCallbacks : public BLEAdvertisedDeviceCallbacks {
       manufacturer = IdentifyManufacturer(currentMac);
     }
 
-    /*
-    for (int i = 0; i < deviceCount; i++) {
-      if ((payloadSignature != "" && discoveredDevices[i].findMyFingerprint == payloadSignature) || (payloadSignature == "" && discoveredDevices[i].macAddress == currentMac)) {
-
-        if (now - discoveredDevices[i].lastSeen > 30000) {
-          discoveredDevices[i].firstSeen = now;
-        }
-
-        discoveredDevices[i].macAddress = currentMac;
-        discoveredDevices[i].rssi = currentRssi;
-        discoveredDevices[i].lastSeen = now;
-
-
-*/
-    /*
-    for (int i = 0; i < deviceCount; i++) {
-      if ((payloadSignature != "" && discoveredDevices[i].findMyFingerprint == payloadSignature) || 
-          (payloadSignature == "" && discoveredDevices[i].macAddress == currentMac)) {
-        
-        // EDGE DETECTION: If it's been gone/unseen for longer than your presence threshold
-        if (now - discoveredDevices[i].lastSeen > ((unsigned long)presenceWindowSeconds * 1000)) {
-          discoveredDevices[i].firstSeen = now;
-          
-          // Cross-reference against your authorised list to pull its friendly name
-          for(int k=0; k<authDeviceCount; k++) {
-            if(authDevices[k].macAddress == currentMac) {
-              String nameToLog = authDevices[k].friendlyName == "" ? "Unassigned Tile" : authDevices[k].friendlyName;
-              triggerSecurityGate(nameToLog); // Open the Alexa gate!
-            }
-          }
-        }
-
-        discoveredDevices[i].macAddress = currentMac; 
-        discoveredDevices[i].rssi = currentRssi;
-        discoveredDevices[i].lastSeen = now;
-        // ... rest of your tracker updates ...
-        discoveredDevices[i].deviceType = manufacturer;
-        found = true;
-        break;
-      }
-    }
-*/
-    /* 
-    // ========================================================
-    // UPDATED: MASTER TRACKING MEMORY ENGINE WITH MULTI-SOURCE GATE TRIGGER
-    // ========================================================
-    unsigned long now = millis();
-    bool found = false;
-    
-    for (int i = 0; i < deviceCount; i++) {
-      if ((payloadSignature != "" && discoveredDevices[i].findMyFingerprint == payloadSignature) || 
-          (payloadSignature == "" && discoveredDevices[i].macAddress == currentMac)) {
-        
-        // 1. CALCULATE EDGE-DETECTION: Has this token been gone/unseen for a while?
-        unsigned long timeSinceLastSeen = now - discoveredDevices[i].lastSeen;
-        
-        if (timeSinceLastSeen > ((unsigned long)presenceWindowSeconds * 1000)) {
-          // It was stale or gone, reset arrival cycle markers
-          discoveredDevices[i].firstSeen = now;
-          
-          // 2. CHECK AUTHORISATION STATUS: Is this newly-returned MAC allowed?
-          for (int k = 0; k < authDeviceCount; k++) {
-            if (authDevices[k].macAddress == currentMac) {
-              String nameToLog = authDevices[k].friendlyName;
-              if (nameToLog == "") nameToLog = "Authorized Bluetooth Key";
-              
-              // ⚡ CRITICAL TRIPPED HANDSHAKE: Open the voice gate!
-              triggerSecurityGate(nameToLog); 
-            }
-          }
-        }
-
-        // Keep standard trace trackers updated
-        discoveredDevices[i].macAddress = currentMac; 
-        discoveredDevices[i].rssi = currentRssi;
-        discoveredDevices[i].lastSeen = now;
-        discoveredDevices[i].deviceType = manufacturer; 
-        found = true;
-        break;
-      }
-    }
-*/
-
     // ========================================================
     // ULTIMATE FIX: MULTI-SOURCE GAP EDGE DETECTION (TILE AND BEACONS)
     // ========================================================
@@ -351,23 +266,7 @@ class MyAdvertisedDeviceCallbacks : public BLEAdvertisedDeviceCallbacks {
         // B) If 'timeSinceLastSeen' is greater than your window, it has physically arrived from outside.
         bool isBrandNewBootCapture = (discoveredDevices[i].firstSeen == discoveredDevices[i].lastSeen);
         bool isFreshArrivalGapPassed = (timeSinceLastSeen > ((unsigned long)presenceWindowSeconds * 1000));
-        /* 
-        if (isBrandNewBootCapture || isFreshArrivalGapPassed) {
-          // Reset arrival timestamps to frame this fresh session anchor
-          discoveredDevices[i].firstSeen = now;
-          
-          // Cross-reference against your authorized settings list to grab its friendly label
-          for (int k = 0; k < authDeviceCount; k++) {
-            if (authDevices[k].macAddress == currentMac) {
-              String nameToLog = authDevices[k].friendlyName;
-              if (nameToLog == "") nameToLog = "Authorized Bluetooth Key";
-              
-              // ⚡ THE GATE OPENER: Open the voice gate instantly!
-              triggerSecurityGate(nameToLog); 
-            }
-          }
-        }
-        */
+ 
         if (isBrandNewBootCapture || isFreshArrivalGapPassed) {
           discoveredDevices[i].firstSeen = now;
 
@@ -434,7 +333,7 @@ bool isAuthorisedTokenPresent() {
 void saveConfigurationToFlash() {
   // Open the "security" flash namespace in Read/Write mode (false)
   prefs.begin("security", false);
-  
+
   // 1. Commit stand-alone configuration adjustments
   prefs.putInt("rssiGate", rssiThreshold);
   prefs.putInt("presenceSec", presenceWindowSeconds);
@@ -443,32 +342,32 @@ void saveConfigurationToFlash() {
   prefs.putInt("arrivalLimit", maxArrivalAgeSeconds);
   prefs.putInt("pingInterval", networkPingIntervalSeconds);
   prefs.putInt("gateDuration", voiceGateOpenDurationSeconds);
-  
+
   // 2. Commit tracking counter totals
   prefs.putInt("btCount", authDeviceCount);
   prefs.putInt("ipCount", authIPCount);
-  
+
   // 3. Commit authorized Bluetooth structural items
   for (int i = 0; i < authDeviceCount; i++) {
     prefs.putString(("btMac" + String(i)).c_str(), authDevices[i].macAddress);
     prefs.putString(("btType" + String(i)).c_str(), authDevices[i].deviceType);
     prefs.putString(("btName" + String(i)).c_str(), authDevices[i].friendlyName);
   }
-  
+
   // 4. Commit authorized iPhone network configurations
   for (int i = 0; i < authIPCount; i++) {
     prefs.putUChar(("ipQuad" + String(i)).c_str(), authIPs[i].lastQuad);
     prefs.putString(("ipName" + String(i)).c_str(), authIPs[i].friendlyName);
   }
-  
-  prefs.end(); // Lock and close the storage container safely
+
+  prefs.end();  // Lock and close the storage container safely
   Serial.println("💾 SUCCESS: All user configurations backed up to Non-Volatile Flash.");
 }
 
 void loadConfigurationFromFlash() {
   // Open the "security" flash namespace in Read-Only mode (true)
   prefs.begin("security", true);
-  
+
   // 1. Load parameters, defaulting to your current values if flash is empty
   rssiThreshold = prefs.getInt("rssiGate", -90);
   presenceWindowSeconds = prefs.getInt("presenceSec", 60);
@@ -477,19 +376,19 @@ void loadConfigurationFromFlash() {
   maxArrivalAgeSeconds = prefs.getInt("arrivalLimit", 300);
   networkPingIntervalSeconds = prefs.getInt("pingInterval", 2);
   voiceGateOpenDurationSeconds = prefs.getInt("gateDuration", 60);
-  
+
   // 2. Load total database counts
   authDeviceCount = prefs.getInt("btCount", 0);
   authIPCount = prefs.getInt("ipCount", 0);
-  
+
   // 3. Rebuild Authorized Bluetooth storage slots
   for (int i = 0; i < authDeviceCount; i++) {
     authDevices[i].macAddress = prefs.getString(("btMac" + String(i)).c_str(), "");
     authDevices[i].deviceType = prefs.getString(("btType" + String(i)).c_str(), "");
     authDevices[i].friendlyName = prefs.getString(("btName" + String(i)).c_str(), "");
-    authDevices[i].hasTrippedGate = false; // Fresh initialization setup
+    authDevices[i].hasTrippedGate = false;  // Fresh initialization setup
   }
-  
+
   // 4. Rebuild Authorized IP Network targets
   for (int i = 0; i < authIPCount; i++) {
     authIPs[i].lastQuad = prefs.getUChar(("ipQuad" + String(i)).c_str(), 0);
@@ -499,7 +398,7 @@ void loadConfigurationFromFlash() {
     authIPs[i].firstSeen = 0;
     authIPs[i].lastSeen = 0;
   }
-  
+
   prefs.end();
   Serial.println("🔄 SUCCESS: Authorization databases recovered from onboard Flash.");
 }
@@ -507,7 +406,7 @@ void loadConfigurationFromFlash() {
 
 
 
-// original security system interface code  here 
+// original security system interface code  here
 
 boolean connectWifi();  // router handed out 192.168.1.169 for this initially at 27A
 
@@ -553,7 +452,7 @@ IO for an ESP-01 setup on a dual relay board
 GPIO0 - Alarm Panel Set/Unset input
 GPIO1 (TXD) = unused exept for serial debug
 GPIO2 -LED Driver 
-GPIO3 (RXD) - potentially the AlarmSounding input . Not used by current code except logging alarm activity towards the local web page and watchdog proxy
+GPIO3 (RXD) - potentially the AlarmSounding input . Not used by current code except logging alarm activity towards the local web page and watchdog proxy adding this back may exceed program space
 
 Onboard relay1 = AlarmSet/Unset control
 Onboard relay2 = Panic Input or outside siren
@@ -693,22 +592,22 @@ void setup() {
   }
   digitalWrite(LedPin, HIGH);  // turn off LED
 
-/* dont need this really
+  /* dont need this really
   Serial.println("Making AlarmSoundingInputPin into an INPUT_PULLUP");
   //pinMode(AlarmSoundingInputPin, FUNCTION_3); old 8266 function, not needed in ESP32
   pinMode(AlarmSoundingInputPin, INPUT_PULLUP);
 
 */
-  Serial.println("Making SetUnsetInputPin into an INPUT_PULLUP");  // used to detect 27A Security  Set/Unset state
+  //Serial.println("Making SetUnsetInputPin into an INPUT_PULLUP");  // used to detect 27A Security  Set/Unset state
 
   //pinMode(SetUnsetInputPin, FUNCTION_3);
   pinMode(SetUnsetInputPin, INPUT);
 
   // Start the server and print local IP address
   // server.begin();
-  Serial.println("");
+  //Serial.println("");
   Serial.println("Wi-Fi connected.");
-  Serial.print("IP address to visit: http://");
+  //Serial.print("IP address to visit: http://");
   Serial.println(WiFi.localIP());
 
   // populate event log headers
@@ -743,10 +642,10 @@ void setup() {
   ProxyLogArray[2] = "oldest Entry Event";
 
   SetTime();  // sync the clock..
-  Serial.println(" Delaying 1 sec before trying clock sync again...");
+  //Serial.println(" Delaying 1 sec before trying clock sync again...");
   delay(1000);
   SetTime();  // sync the clock..
-  Serial.println(" completed 2nd clock sync ..");
+  //Serial.println(" completed 2nd clock sync ..");
   // Load root certificate in DER format into WiFiClientSecure object
   bool res = 0;  //client.setCACert_P(caCert, caCertLen);
                  //if (!res) {
@@ -759,7 +658,7 @@ void setup() {
 
   // Populate " - " in all Proxy log slots
 
-  Serial.println("populating array with - ");
+  //Serial.println("populating array with - ");
 
   for (ProxyLogArrayIndex = 0; ProxyLogArrayIndex < 57; ProxyLogArrayIndex = ProxyLogArrayIndex + 1) {
 
@@ -771,7 +670,7 @@ void setup() {
   LastRebootTime = (String(currenthours) + ":" + String(currentminutes) + ":" + String(currentseconds));
 
   // Insert reboot time as first event in event table
-  Serial.println("populating array with boot time");
+  //Serial.println("populating array with boot time");
   ProxyLogArray[57] = (String(currentday) + " / " + String(currentmonth));
   ProxyLogArray[58] = (String(currenthours) + ":" + String(currentminutes) + ":" + String(currentseconds));
   ProxyLogArray[59] = "Restarted";
@@ -804,138 +703,12 @@ void setup() {
   server.on("/SET", handleSet);
   server.on("/UNSET", handleUnSet);
 
-// server.on("/setRadioParams", handleRadioParams);
+  // server.on("/setRadioParams", handleRadioParams);
 
-/*
-start of old route block
-  // Route to Authorise a device
-  server.on("/authorise", []() {
-    String mac = server.arg("mac");
-    String type = server.arg("type");
-    mac.toUpperCase();
-
-    // Check if already authorised or if array is full
-    bool exists = false;
-    for (int i = 0; i < authDeviceCount; i++) {
-      if (authDevices[i].macAddress == mac) exists = true;
-    }
-
-    if (!exists && authDeviceCount < MAX_AUTH_DEVICES && mac != "") {
-      authDevices[authDeviceCount].macAddress = mac;
-      authDevices[authDeviceCount].deviceType = type;
-      authDeviceCount++;
-    }
-    // Redirect back to main page immediately
-    server.sendHeader("Location", "/");
-    server.send(303);
-  });
-
-  // Route to Deauthorise a device
-  server.on("/deauthorise", []() {
-    String mac = server.arg("mac");
-    mac.toUpperCase();
-
-    // Search array and shift items left to remove it cleanly
-    for (int i = 0; i < authDeviceCount; i++) {
-      if (authDevices[i].macAddress == mac) {
-        for (int j = i; j < authDeviceCount - 1; j++) {
-          authDevices[j] = authDevices[j + 1];
-        }
-        authDeviceCount--;
-        break;
-      }
-    }
-    server.sendHeader("Location", "/");
-    server.send(303);
-  });
-
-  // Route to Save the Adjustable Time Window form field
-  server.on("/save-settings", []() {
-    if (server.hasArg("window")) {
-      authTimeWindowSeconds = server.arg("window").toInt();
-    }
-    if (server.hasArg("arrival_limit")) {
-      maxArrivalAgeSeconds = server.arg("arrival_limit").toInt();
-    }
-    if (server.hasArg("ping_interval")) {  // 👈 NEW: Capture ping slider/number field
-      networkPingIntervalSeconds = server.arg("ping_interval").toInt();
-      if (networkPingIntervalSeconds < 1) networkPingIntervalSeconds = 1;  // Safety floor
-    }
-    if (server.hasArg("gate_duration")) {  // 👈 NEW: Capture Alexa open window duration
-      voiceGateOpenDurationSeconds = server.arg("gate_duration").toInt();
-    }
-    server.sendHeader("Location", "/");
-    server.send(303);
-  });
-
-  // ========================================================
-  // ROUTE: UPDATE BLUETOOTH CUSTOM FRIENDLY ALIAS NAME
-  // ========================================================
-  server.on("/update-bt-name", []() {
-    String mac = server.arg("mac");
-    String name = server.arg("name");
-    mac.toUpperCase();
-
-    // Search your authorised array for a matching MAC and assign the name
-    for (int i = 0; i < authDeviceCount; i++) {
-      if (authDevices[i].macAddress == mac) {
-        authDevices[i].friendlyName = name;
-        break;
-      }
-    }
-
-    // Bounce the browser cleanly back to the home page dashboard
-    server.sendHeader("Location", "/");
-    server.send(303);
-  });
-
-  // ========================================================
-  // ROUTE: ADD NEW IPHONE IP TO DATABASE
-  // ========================================================
-  server.on("/add-ip", []() {
-    int quad = server.arg("quad").toInt();
-    String name = server.arg("name");
-
-    // Validate boundaries (1-254) and space constraints
-    if (quad > 0 && quad < 255 && authIPCount < MAX_AUTH_IPS) {
-      authIPs[authIPCount].lastQuad = quad;
-      authIPs[authIPCount].friendlyName = name;
-      authIPs[authIPCount].isOnline = false;
-      authIPs[authIPCount].firstSeen = 0;
-      authIPs[authIPCount].lastSeen = 0;
-      authIPCount++;
-    }
-
-    // Redirect browser cleanly back to the home panel
-    server.sendHeader("Location", "/");
-    server.send(303);
-  });
-
-  // ========================================================
-  // ROUTE: REMOVE IPHONE IP FROM DATABASE
-  // ========================================================
-  server.on("/remove-ip", []() {
-    int index = server.arg("index").toInt();
-
-    // Verify target line index bounds, shift array items left to delete
-    if (index >= 0 && index < authIPCount) {
-      for (int i = index; i < authIPCount - 1; i++) {
-        authIPs[i] = authIPs[i + 1];
-      }
-      authIPCount--;
-    }
-
-    server.sendHeader("Location", "/");
-    server.send(303);
-  });
-
-end of old routes
-*/ 
-
-// ==========================================
+  // ==========================================
   // MASTER ROOT PANEL RENDERING ENDPOINT
   // ==========================================
-  server.on("/", handleRoot); 
+  server.on("/", handleRoot);
 
   // ==========================================
   // ROUTE: AUTHORISE NEW BLUETOOTH DEVICE
@@ -944,21 +717,21 @@ end of old routes
     String mac = server.arg("mac");
     String type = server.arg("type");
     mac.toUpperCase();
-    
+
     bool exists = false;
-    for(int i = 0; i < authDeviceCount; i++) {
-      if(authDevices[i].macAddress == mac) exists = true;
+    for (int i = 0; i < authDeviceCount; i++) {
+      if (authDevices[i].macAddress == mac) exists = true;
     }
-    
+
     if (!exists && authDeviceCount < MAX_AUTH_DEVICES && mac != "") {
       authDevices[authDeviceCount].macAddress = mac;
       authDevices[authDeviceCount].deviceType = type;
-      authDevices[authDeviceCount].friendlyName = ""; // Initially clear
+      authDevices[authDeviceCount].friendlyName = "";  // Initially clear
       authDevices[authDeviceCount].hasTrippedGate = false;
       authDeviceCount++;
-      
+
       // 💾 BACKUP INSTANTLY: Save changes to physical silicon tracking lines
-      saveConfigurationToFlash(); 
+      saveConfigurationToFlash();
     }
     server.sendHeader("Location", "/");
     server.send(303);
@@ -970,16 +743,16 @@ end of old routes
   server.on("/deauthorise", []() {
     String mac = server.arg("mac");
     mac.toUpperCase();
-    
+
     for (int i = 0; i < authDeviceCount; i++) {
       if (authDevices[i].macAddress == mac) {
         for (int j = i; j < authDeviceCount - 1; j++) {
           authDevices[j] = authDevices[j + 1];
         }
         authDeviceCount--;
-        
+
         // 💾 BACKUP INSTANTLY
-        saveConfigurationToFlash(); 
+        saveConfigurationToFlash();
         break;
       }
     }
@@ -994,13 +767,13 @@ end of old routes
     String mac = server.arg("mac");
     String name = server.arg("name");
     mac.toUpperCase();
-    
+
     for (int i = 0; i < authDeviceCount; i++) {
       if (authDevices[i].macAddress == mac) {
         authDevices[i].friendlyName = name;
-        
+
         // 💾 BACKUP INSTANTLY
-        saveConfigurationToFlash(); 
+        saveConfigurationToFlash();
         break;
       }
     }
@@ -1014,7 +787,7 @@ end of old routes
   server.on("/add-ip", []() {
     int quad = server.arg("quad").toInt();
     String name = server.arg("name");
-    
+
     if (quad > 0 && quad < 255 && authIPCount < MAX_AUTH_IPS) {
       authIPs[authIPCount].lastQuad = quad;
       authIPs[authIPCount].friendlyName = name;
@@ -1023,28 +796,28 @@ end of old routes
       authIPs[authIPCount].firstSeen = 0;
       authIPs[authIPCount].lastSeen = 0;
       authIPCount++;
-      
+
       // 💾 BACKUP INSTANTLY
-      saveConfigurationToFlash(); 
+      saveConfigurationToFlash();
     }
     server.sendHeader("Location", "/");
     server.send(303);
   });
 
   // ==========================================
-  // ROUTE: REMOVE VERIFIED PHONE IP 
+  // ROUTE: REMOVE VERIFIED PHONE IP
   // ==========================================
   server.on("/remove-ip", []() {
     int index = server.arg("index").toInt();
-    
+
     if (index >= 0 && index < authIPCount) {
       for (int i = index; i < authIPCount - 1; i++) {
         authIPs[i] = authIPs[i + 1];
       }
       authIPCount--;
-      
+
       // 💾 BACKUP INSTANTLY
-      saveConfigurationToFlash(); 
+      saveConfigurationToFlash();
     }
     server.sendHeader("Location", "/");
     server.send(303);
@@ -1058,10 +831,10 @@ end of old routes
     if (server.hasArg("arrival_limit")) maxArrivalAgeSeconds = server.arg("arrival_limit").toInt();
     if (server.hasArg("ping_interval")) networkPingIntervalSeconds = server.arg("ping_interval").toInt();
     if (server.hasArg("gate_duration")) voiceGateOpenDurationSeconds = server.arg("gate_duration").toInt();
-    
+
     // 💾 BACKUP INSTANTLY
-    saveConfigurationToFlash(); 
-    
+    saveConfigurationToFlash();
+
     server.sendHeader("Location", "/");
     server.send(303);
   });
@@ -1073,16 +846,16 @@ end of old routes
     if (server.hasArg("rssi")) rssiThreshold = server.arg("rssi").toInt();
     if (server.hasArg("window")) presenceWindowSeconds = server.arg("window").toInt();
     if (server.hasArg("scantime")) scanSliceDuration = server.arg("scantime").toInt();
-    
+
     // 💾 BACKUP INSTANTLY
-    saveConfigurationToFlash(); 
-    
+    saveConfigurationToFlash();
+
     server.sendHeader("Location", "/");
     server.send(303);
   });
 
-  
-  server.begin(); // Always near the end of setup()
+
+  server.begin();  // Always near the end of setup()
   //Serial.println(F("HTTP Web Server Started!"));
 
   // ⚡ LAUNCH THE INDEPENDENT THREAD ENGINE
@@ -1101,7 +874,6 @@ end of old routes
   delay(1000);
 
 }  // end of void setup
-
 
 void loop() {
 
@@ -1136,9 +908,9 @@ void loop() {
     }
   }
 
- PrevSec27ASetState = Sec27ASetState;            // edge detection of Burglar Alarm state
+  PrevSec27ASetState = Sec27ASetState;  // edge detection of Burglar Alarm state
 
-/*
+  /*
   Sec27ASoundingState = !digitalRead(AlarmSoundingInputPin);  // Used for Detecting the Alarm sounding
   delay(100);
   if (Sec27ASoundingState == LOW) {
@@ -1165,8 +937,6 @@ void loop() {
 
   */
 
- 
-
   if (wifiConnected) {
     // digitalWrite(LedPin, LOW); // turn on LED with voltage Low
     upnpBroadcastResponder.serverLoop();
@@ -1184,8 +954,6 @@ void loop() {
     VBNumber = 40;  // 27A security watchdog code
     WatchDogPost();
   }
-
-
 
   //Keep time
   if (millis() >= (previousMillis)) {
@@ -1254,19 +1022,6 @@ void loop() {
     }
   }
 
-  /* 
-This didnt work well
-  // Always process web requests first
-  server.handleClient();
-
-  // STRICT IF-GATE: Only run the ping engine if a user isn't loading the page
-  if (isUserLoadingWebPage == false) {
-    runNetworkPingScanner();
-  } else {
-    //Serial.println("Ping skipped: Web server is currently busy transmitting!");
-  }
-*/
-
   // Process incoming web browser connections instantly without locking the CPU
   server.handleClient();
 
@@ -1302,31 +1057,31 @@ This didnt work well
     for (int i = 0; i < deviceCount; i++) {
       // Check if the token was detected within a safe 60-second window
       if (currentMillis - discoveredDevices[i].lastSeen < 60000) {
-        Serial.print("MAC: ");
-        Serial.print(discoveredDevices[i].macAddress);
-        Serial.print(" [");
-        Serial.print(discoveredDevices[i].deviceType);
-        Serial.print("] | RSSI: ");
-        Serial.print(discoveredDevices[i].rssi);
-        Serial.print(" dBm | ");
+        //Serial.print("MAC: ");
+        //Serial.print(discoveredDevices[i].macAddress);
+        //Serial.print(" [");
+        //Serial.print(discoveredDevices[i].deviceType);
+        //Serial.print("] | RSSI: ");
+        //Serial.print(discoveredDevices[i].rssi);
+        //Serial.print(" dBm | ");
 
         // Calculate Last Seen timing
         unsigned long lastSeenSec = (currentMillis - discoveredDevices[i].lastSeen) / 1000;
-        Serial.print("Last seen: ");
-        Serial.print(lastSeenSec);
-        Serial.print("s ago | ");
+        //Serial.print("Last seen: ");
+        //Serial.print(lastSeenSec);
+        //Serial.print("s ago | ");
 
         // NEW: Uncapped Exact Duration tracking (Minutes and Seconds breakdown)
         unsigned long totalTimeSec = (currentMillis - discoveredDevices[i].firstSeen) / 1000;
         unsigned long mins = totalTimeSec / 60;
         unsigned long secs = totalTimeSec % 60;
 
-        Serial.print("Duration: ");
+        //Serial.print("Duration: ");
         if (mins > 0) {
-          Serial.print(mins);
-          Serial.print("m ");
+          //Serial.print(mins);
+          //Serial.print("m ");
         }
-        Serial.print(secs);
+        //Serial.print(secs);
         //Serial.println("s in range");
 
         activeCount++;
@@ -1334,7 +1089,7 @@ This didnt work well
     }
 
     if (activeCount == 0) {
-      Serial.println("No active beacons nearby.");
+      //Serial.println("No active beacons nearby.");
     }
     //Serial.println("----------------------------------");
 
@@ -1367,7 +1122,7 @@ This didnt work well
 
 void handleRoot() {
 
-  Serial.println("New Client in handleRoot.");  // print a message out in the serial port
+  //Serial.println("New Client in handleRoot.");  // print a message out in the serial port
 
 
 
@@ -1385,35 +1140,7 @@ if (request->hasArg("key")) {
   Serial.println("No 'key' argument found in URL");
 }
 */
-  /* 
-new head statemnet provided 
-  // Start building your HTML response string
-  // --- START OF HTML WEB PAGE ---
-  String html = "<!DOCTYPE html><html>";
-  html += "<meta charset='UTF-8'>";  // 👈 allows  modern 4-byte Unicode characters (like emojis)to render
-  html += "<head><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">";
-  html += "<link rel=\"icon\" href=\"data:,\">";
-
-  // Auto-refresh the page every 5 seconds to keep the BT list live
-  html += "<script>";
-  html += "setInterval(function() {";
-  html += "  if (!sessionStorage.getItem('typing')) {";
-  html += "    window.location.reload();";
-  html += "  }";
-  html += "}, 2000);";  // Refreshes every 2 seconds, but ONLY if you aren't typing
-  html += "</script>";
-
-  // Simple CSS styling for mobile-responsiveness
-  html += "<style>html { font-family: Helvetica; display: inline-block; margin: 0px auto; text-align: center;}";
-  html += ".button { background-color: #4CAF50; border: none; color: white; padding: 16px 40px;";
-  html += "text-decoration: none; font-size: 30px; margin: 2px; cursor: pointer;}";
-  html += ".button2 {background-color: #555555;}</style></head>";
-
-  // Web Page Heading
-  html += "<body><h1>27A Security Interface Log</h1>";
-
-  */
-
+ 
   // Start building your HTML response string
   // --- START OF HTML WEB PAGE ---
   String html = "<!DOCTYPE html>\n<html>\n<head>\n";
@@ -1461,7 +1188,7 @@ new head statemnet provided
   // Display last Reboot Time
   html += "<p>Last Restart was " + LastRebootTime + " on " + LastRebootDate + " which was " + String(UpTimeDays) + " days ago" + "</p>";
 
-/*
+  /*
 works, but irrelevant 
   // Display current state, and show ON/OFF buttons
   html += "<p>LED Status: <strong>" + ledState + "</strong></p>";
@@ -1516,37 +1243,6 @@ works, but irrelevant
     html += "<p>Current Security System Status: <strong> SET (enabled/on) </strong></p>";
     html += "<p><a href=\"UNSET\"><button class=\"button button2\">UnSET Alarm</button></a></p>";
   }
-
-  /* 
-  change from sliders to inpt boxes 
-  // --- STREAMLINED FILTER CONTROLLER BOX ---
-  html += "<div style='text-align: center; margin: 10px auto; padding: 10px; width: 90%; max-width: 380px; border: 1px solid #bbb; border-radius: 6px; font-size: 0.9em; background-color: #f9f9f9;'>";
-  html += "  <h5 style='margin: 0 0 8px 0;'>Bluetooth Radio & Filter Settings</h5>";
-  html += "  <form action='/setRadioParams' method='GET'>";
-
-  // Slider 1: RSSI Sensitivity
-  html += "    <div style='margin-bottom: 6px;'>";
-  html += "      <label style='display:block; margin-bottom:2px;'>RSSI Gate: <b>" + String(rssiThreshold) + " dBm</b></label>";
-  html += "      <input type='range' name='rssi' min='-100' max='-10' step='1' value='" + String(rssiThreshold) + "' style='width: 85; height: 4px;'>";
-  html += "    </div>";
-
-  // Slider 2: Detection Window Timeout
-  html += "    <div style='margin-bottom: 6px;'>";
-  html += "      <label style='display:block; margin-bottom:2px;'>Keep-Alive Window: <b>" + String(presenceWindowSeconds) + "s</b></label>";
-  html += "      <input type='range' name='window' min='10' max='300' step='5' value='" + String(presenceWindowSeconds) + "' style='width: 85%; height: 4px;'>";
-  html += "    </div>";
-
-  // Slider 3: NEW Scan Slice Duration
-  html += "    <div style='margin-bottom: 10px;'>";
-  html += "      <label style='display:block; margin-bottom:2px;'>Scan Slice: <b>" + String(scanSliceDuration) + "s</b></label>";
-  html += "      <input type='range' name='scantime' min='1' max='10' step='1' value='" + String(scanSliceDuration) + "' style='width: 85%; height: 4px;'>";
-  html += "    </div>";
-
-  html += "    <input type='submit' class='buttonsmall' style='padding: 4px 10px; font-size: 0.85em;' value='Apply Changes'>";
-  html += "  </form>";
-  html += "</div>";
-
-*/
 
   // --- STREAMLINED FILTER CONTROLLER BOX (CONVERTED TO TEXT ENTRY WITH FREEZE HOOKS) ---
   html += "<div style='text-align: center; margin: 10px auto; padding: 10px; width: 90%; max-width: 380px; border: 1px solid #bbb; border-radius: 6px; font-size: 0.9em; background-color: #f9f9f9;'>";
@@ -1663,46 +1359,6 @@ works, but irrelevant
   }
   html += "</table>";
 
-  /*
-  // ======================================================
-  // UPDATED: SETTINGS CONFIGURATION FORM (Triple Value Constraints)
-  // ======================================================
-  html += "<div style='margin: 20px auto; width: 95%; max-width: 700px; text-align: center; border: 1px dashed #666; padding: 15px; background-color: #fff;'>";
-  html += "<form action='/save-settings' method='POST'>";
-
-  html += "<div style='display: inline-block; margin: 5px 15px;'><b>Active Presence Window: </b>";
-  html += "<input type='number' name='window' value='" + String(authTimeWindowSeconds) + "' style='width:60px; text-align:center;'> seconds</div>";
-
-  html += "<div style='display: inline-block; margin: 5px 15px;'><b>🔒 Fresh Arrival Trust: </b>";
-  html += "<input type='number' name='arrival_limit' value='" + String(maxArrivalAgeSeconds) + "' style='width:60px; text-align:center;'> seconds</div>";
-
-  // NEW INPUT ROW FOR PING REFRESH RATE
-  html += "<div style='display: inline-block; margin: 5px 15px;'><b>⚡ Network Ping Interval: </b>";
-  html += "<input type='number' name='ping_interval' min='1' max='60' value='" + String(networkPingIntervalSeconds) + "' style='width:60px; text-align:center;'> seconds</div>";
-
-  html += "<div style='margin-top: 15px;'><input type='submit' value='Save All Settings' style='padding: 6px 20px; font-weight: bold; background-color: #333; color: white; border: none; cursor: pointer;'></div>";
-  html += "</form></div>";
-
-*/
-  /* 
-changed to allow easy filling
-  // ======================================================
-  // UPDATED: SETTINGS CONFIGURATION FORM (Quad Constraints)
-  // ======================================================
-  html += "<div style='margin: 20px auto; width: 95%; max-width: 700px; text-align: center; border: 1px dashed #666; padding: 15px; background-color: #fff;'>";
-  html += "<form action='/save-settings' method='POST'>";
-  
-  html += "<div style='display: inline-block; margin: 5px 10px;'><b>Active Presence: </b><input type='number' name='window' value='" + String(authTimeWindowSeconds) + "' style='width:50px; text-align:center;'>s</div>";
-  html += "<div style='display: inline-block; margin: 5px 10px;'><b>🔒 Fresh Arrival: </b><input type='number' name='arrival_limit' value='" + String(maxArrivalAgeSeconds) + "' style='width:50px; text-align:center;'>s</div>";
-  html += "<div style='display: inline-block; margin: 5px 10px;'><b>⚡ Ping Interval: </b><input type='number' name='ping_interval' value='" + String(networkPingIntervalSeconds) + "' style='width:50px; text-align:center;'>s</div>";
-  
-  // NEW FIELD: ALEXA GATE OPEN WINDOW
-  html += "<div style='display: inline-block; margin: 5px 10px;'><b>🎙️ Voice Gate Open: </b><input type='number' name='gate_duration' value='" + String(voiceGateOpenDurationSeconds) + "' style='width:50px; text-align:center;'>s</div>";
-  
-  html += "<div style='margin-top: 15px;'><input type='submit' value='Save All Settings' style='padding: 6px 20px; font-weight: bold; background-color: #333; color: white; border: none; cursor: pointer;'></div>";
-  html += "</form></div>";
-  */
-
   // ======================================================
   // UPDATED: SETTINGS CONFIGURATION FORM (FREEZE-SAFE OVERRIDES)
   // ======================================================
@@ -1737,7 +1393,7 @@ changed to allow easy filling
                                                    "onfocus=\"sessionStorage.setItem('typing', 'true');\" "
                                                    "onblur=\"sessionStorage.removeItem('typing');\">s</div>";
 
-   
+
   html += "    <input type='submit' class='buttonsmall' style='padding: 4px 15px; font-size: 0.85em; cursor: pointer;' value='Apply Changes'>";
   //html += "<div style='margin-top: 15px;'><input type='submit' value='Save All Settings' style='padding: 6px 20px; font-weight: bold; background-color: #333; color: white; border: none; cursor: pointer;'></div>";
   html += "</form></div>";
@@ -1823,29 +1479,7 @@ changed to allow easy filling
                                                                                        "onblur=\"sessionStorage.removeItem('typing');\"> ";
       html += "<input type='submit' value='Set' style='font-size:10px; padding:2px;'>";
       html += "</form></td>";
-      /*
-      // 2. CALCULATE VALID / EXPIRED STATUS STRATEGY
-      String liveStatus = "<span style='color:red; font-weight:bold;'>🔴 Expired (Out of Range)</span>";
-      for (int j = 0; j < deviceCount; j++) {
-        if (discoveredDevices[j].macAddress == authDevices[i].macAddress) {
-          unsigned long lastSeenDelta = (currentMillis - discoveredDevices[j].lastSeen) / 1000;
-          unsigned long totalDurationSeconds = (currentMillis - discoveredDevices[j].firstSeen) / 1000;
 
-          bool isCurrentlyPresent = (lastSeenDelta <= (unsigned long)authTimeWindowSeconds);
-          bool isFreshArrival = (totalDurationSeconds <= (unsigned long)maxArrivalAgeSeconds);
-
-          if (isCurrentlyPresent && isFreshArrival) {
-            unsigned long remainingTrust = maxArrivalAgeSeconds - totalDurationSeconds;
-            liveStatus = "<span style='color:green; font-weight:bold;'>🟢 Valid (" + String(remainingTrust) + "s trust left)</span>";
-          } else if (isCurrentlyPresent && !isFreshArrival) {
-            liveStatus = "<span style='color:orange; font-weight:bold;'>🟠 Expired (Static / Sitting Home)</span>";
-          } else {
-            liveStatus = "<span style='color:red; font-weight:bold;'>🔴 Expired (Inactive " + String(lastSeenDelta) + "s)</span>";
-          }
-          break;
-        }
-      }
-*/
       // ======================================================
       // 2. CALCULATE VALID / EXPIRED STATUS STRATEGY (WITH LATCH CLEANUP)
       // ======================================================
@@ -1917,15 +1551,8 @@ changed to allow easy filling
   // --- END OF HTML WEB PAGE ---
 
   // Instantly send the full page text to the browser non-blockingly
-  //server.send(200, "text/html", html);
-
-  // Right before you send the data, lock the gate
-  //isUserLoadingWebPage = true;
-
   server.send(200, "text/html; charset=utf-8", html);
 
-  // Right after the data is safely sent, unlock the gate
-  //isUserLoadingWebPage = false;
 }  // end of handleroot
 
 bool Sec27ASetOn() {
@@ -2010,15 +1637,15 @@ bool Sec27AUnsetOn() {
     if (securitySystemDisableAuthorised == true) {
       securitySystemDisableAuthorised = false;
 
-        //Serial.println("XXX Pulsing Relay on ...");
-        // AlarmSetLockout = LOW; // reset the lockout for the turn on function
-        // this in asymetric and doesnt have a lockout for preventing multiple offs like the on function
-        // becasue the alarm unsets immediatly and prevents any subsequent requests from alexa as being
-        // processed as on commands.
-        // I think.
+      //Serial.println("XXX Pulsing Relay on ...");
+      // AlarmSetLockout = LOW; // reset the lockout for the turn on function
+      // this in asymetric and doesnt have a lockout for preventing multiple offs like the on function
+      // becasue the alarm unsets immediatly and prevents any subsequent requests from alexa as being
+      // processed as on commands.
+      // I think.
 
-        // Turn on #1 Relay
-        delay(10);
+      // Turn on #1 Relay
+      delay(10);
       Serial.write(rel1ON, sizeof(rel1ON));
       delay(10);
       //Serial.println("Turning Relay#1 On ...");
@@ -2051,16 +1678,15 @@ bool Sec27AUnsetOn() {
       Serial.write(rel1OFF, sizeof(rel1OFF));
       delay(10);
       //Serial.println("Turning Relay#1 Off ...");
-    } else { // if (securitySystemDisableAuthorised == true)
+    } else {  // if (securitySystemDisableAuthorised == true)
       //Serial.println("27A Security UnSet Request NOT Honored - No Auth keys found");
       ProxyRequestText = "UnSet Request NOT Honored - No Auth keys found";
       RotateProxyLogArray();
     }
-  } else { //
-      //Serial.println("27A Security UnSet Request NOT Honored - Already Set");
-      ProxyRequestText = "UnSet Request NOT Honored - Already Set";
-      RotateProxyLogArray();
-
+  } else {  //
+    //Serial.println("27A Security UnSet Request NOT Honored - Already Set");
+    ProxyRequestText = "UnSet Request NOT Honored - Already Set";
+    RotateProxyLogArray();
   }
 
   isSec27AUnsetOn = false;
@@ -2108,10 +1734,6 @@ bool Sec27APanicOn() {
   delay(10);
   //Serial.println("Turning Relay#2 Off ...");
 
-
-
-
-
   isSec27APanicOn = false;
   return isSec27APanicOn;
 }
@@ -2134,7 +1756,6 @@ bool Sec27APanicOff() {
   Serial.write(rel2OFF, sizeof(rel2OFF));
   delay(10);
   //Serial.println("Turning Relay#2 Off ...");
-
 
   isSec27APanicOn = false;
   return Sec27ASetState;
@@ -2160,10 +1781,10 @@ boolean connectWifi() {
   //Serial.println("Connecting to WiFi Network");
 
   // Wait for connection
-  Serial.print("Connecting ...");
+  //Serial.print("Connecting ...");
   while (WiFi.status() != WL_CONNECTED) {
     delay(5000);
-    Serial.print(".");
+    //Serial.print(".");
     if (i > 10) {
       state = false;
       break;
@@ -2192,7 +1813,7 @@ void ProxyPost() {
   // 2 is Burglar Alarm has Seted
   // 3 is Burglar Alarm is Unset
   // 4 is Burglar Alarm Sounding
-  Serial.print("Requesting POST to Proxy ");
+  //Serial.print("Requesting POST to Proxy ");
   //Serial.println(VBNumberString);
 
   WiFiClient client;
@@ -2214,7 +1835,7 @@ void ProxyPost() {
 */
   client.println("Host: ProxyRequest" + VBNumberString);  // this endpoint value gets to the server and is used to transfer the identity of the calling slave
   //Serial.println("Host: ProxyRequest" + VBNumberString);  // send to serial port as well
-  client.println("Accept: */*");                          // this gets to the server!
+  client.println("Accept: */*");  // this gets to the server!
   client.println("Content-Type: application/x-www-form-urlencoded");
   client.print("Content-Length: ");
   client.println(data.length());
@@ -2238,7 +1859,7 @@ void WatchDogPost() {
   VBNumber = 40;  // 27A security watchdog code
   // 40 is Burglar Alarm watchdog
 
-  Serial.print("Requesting POST to WatchDog ");
+  //Serial.print("Requesting POST to WatchDog ");
   //Serial.println(VBNumber);
 
   WiFiClient client;
@@ -2303,8 +1924,8 @@ void SetTime() {
   // Loop runs while time is invalid AND we haven't hit the 10-second timeout (50 * 200ms)
   while (now < 100 && SNTPtimeoutCounter < 50) {
     delay(200);
-    Serial.print(".");
-    Serial.print(String(now));
+    //Serial.print(".");
+    //Serial.print(String(now));
     now = time(nullptr);
     SNTPtimeoutCounter++;  // Increment counter
   }
@@ -2343,7 +1964,7 @@ void SetTime() {
 
   //ProxyRequestText = "RTC ReSync Success";
   //RotateProxyLogArray();
-  Serial.println("end of SetTime!");
+  //Serial.println("end of SetTime!");
 }  // End SetTime
 
 void RotateProxyLogArray() {
@@ -2438,312 +2059,6 @@ void handleUnSet() {
   server.sendHeader("Location", "/");
   server.send(303, "text/plain", "Redirecting...");
 }
-/*
-void handleRadioParams() {
-
-    Serial.println("is this handleRadioParams function even being used ?? " );
-  if (server.hasArg("rssi")) rssiThreshold = server.arg("rssi").toInt();
-  if (server.hasArg("window")) presenceWindowSeconds = server.arg("window").toInt();
-  if (server.hasArg("scantime")) scanSliceDuration = server.arg("scantime").toInt();  // Parse new slider
-
-  Serial.print("Parameters Updated -> Gate: ");
-  Serial.print(rssiThreshold);
-  Serial.print("dBm | Window: ");
-  Serial.print(presenceWindowSeconds);
-  Serial.print("s | Scan Slice: ");
-  Serial.print(scanSliceDuration);
-  Serial.println("s");
-
-  // Send an HTTP Redirect (303) back to dashboard root
-  server.sendHeader("Location", "/");
-  server.send(303, "text/plain", "Redirecting...");
-}
-*/
-
-/* old scanner
-void runNetworkPingScanner() {
-  unsigned long currentMillis = millis();
-  
-       Serial.println("in Ping routine" );
-  // Dynamic User-Adjusted Interval Constraint (Default: 2 seconds)
-  if (currentMillis - lastPingTime >= ((unsigned long)networkPingIntervalSeconds * 1000)) {
-    lastPingTime = currentMillis;
-    Serial.println("its time to ping" );
-    // Fetch local gateway data structures cleanly
-    IPAddress localIP = WiFi.localIP();
-    
-    for (int i = 0; i < authIPCount; i++) {
-      if (authIPs[i].lastQuad == 0) continue; 
-      Serial.println(authIPs[i].lastQuad );
-      // FIXED: Correctly isolate individual byte quads using array indexes
-      IPAddress targetIP(localIP[0], localIP[1], localIP[2], authIPs[i].lastQuad);
-
-       Serial.println(targetIP);
-
-      // Run ESPping check (Sends 1 packet with a 500ms timeout window)
-      if (Ping.ping(targetIP, 1)) {
-        // iPhone responded!
-        Serial.println("phone online" );
-        if (!authIPs[i].isOnline || (currentMillis - authIPs[i].lastSeen > 60000)) {
-          // Fresh arrival: Reset the countdown window if previously offline
-          authIPs[i].firstSeen = currentMillis;
-        }
-        authIPs[i].lastSeen = currentMillis;
-        authIPs[i].isOnline = true;
-      } else {
-        // iPhone went silent (or went out of range)
-        authIPs[i].isOnline = false;
-        Serial.println("phone not online" );
-      }
-    }
-  }
-}
-
-*/
-
-/* 
-
-2nd attempt
-void runNetworkPingScanner() {
-  unsigned long currentMillis = millis();
-  
-  // Dynamic User-Adjusted Interval Constraint (Default: 2 seconds)
-  if (currentMillis - lastPingTime >= ((unsigned long)networkPingIntervalSeconds * 1000)) {
-    lastPingTime = currentMillis;
-    
-    // 1. Fetch dynamic local configuration
-    IPAddress localIP = WiFi.localIP();
-    
-    // 2. FIXED: Explicitly convert the first 3 fields into clean, raw numbers
-    uint8_t ip0 = localIP[0];
-    uint8_t ip1 = localIP[1];
-    uint8_t ip2 = localIP[2];
-    
-    for (int i = 0; i < authIPCount; i++) {
-      if (authIPs[i].lastQuad == 0) continue; 
-      
-      // 3. Assemble target destination using raw numbers safely
-      IPAddress targetIP(ip0, ip1, ip2, authIPs[i].lastQuad);
-      
-      // 4. Debug output verification line
-      Serial.print("Issuing core ping request to destination address: ");
-      Serial.println(targetIP);
-      
-      // Run ESPping check (Sends 1 packet with a 500ms timeout window)
-      if (Ping.ping(targetIP, 1)) {
-        Serial.println(" -> SUCCESS! Target device online.");
-        // iPhone responded!
-        if (!authIPs[i].isOnline || (currentMillis - authIPs[i].lastSeen > 60000)) {
-          // Fresh arrival: Reset the countdown window if previously offline
-          authIPs[i].firstSeen = currentMillis;
-        }
-        authIPs[i].lastSeen = currentMillis;
-        authIPs[i].isOnline = true;
-      } else {
-        Serial.println(" -> FAILED! Host unreachable.");
-        // iPhone went silent (or went out of range)
-        authIPs[i].isOnline = false;
-      }
-    }
-  }
-}
-
-*/
-/*
-3rd attempt
-void runNetworkPingScanner() {
-  unsigned long currentMillis = millis();
-  
-  // Dynamic User-Adjusted Interval Constraint (Default: 2 seconds)
-  if (currentMillis - lastPingTime >= ((unsigned long)networkPingIntervalSeconds * 1000)) {
-    lastPingTime = currentMillis;
-    
-    // 1. Fetch live network parameters
-    IPAddress localIP = WiFi.localIP();
-    
-    for (int i = 0; i < authIPCount; i++) {
-      if (authIPs[i].lastQuad == 0) continue; 
-      
-      // 2. FIXED: Instantiate the IPAddress object via explicit bracket constructor formatting
-      IPAddress targetIP;
-      targetIP[0] = localIP[0];
-      targetIP[1] = localIP[1];
-      targetIP[2] = localIP[2];
-      targetIP[3] = authIPs[i].lastQuad;
-      
-      // Debug verification printouts
-      Serial.print("Issuing core ping request to destination address: ");
-      Serial.println(targetIP);
-      
-      // 3. Execute core network ping via the dvarrel library syntax wrapper
-      if (Ping.ping(targetIP, 1)) {
-        Serial.println(" -> SUCCESS! Target device online.");
-        
-        if (!authIPs[i].isOnline || (currentMillis - authIPs[i].lastSeen > 60000)) {
-          // Fresh arrival trigger state hook reset
-          authIPs[i].firstSeen = currentMillis;
-        }
-        authIPs[i].lastSeen = currentMillis;
-        authIPs[i].isOnline = true;
-      } else {
-        Serial.println(" -> FAILED! Host unreachable.");
-        authIPs[i].isOnline = false;
-      }
-    }
-  }
-}
-*/
-/* 
-4th attempt
-void runNetworkPingScanner() {
-  unsigned long currentMillis = millis();
-  
-  // Dynamic User-Adjusted Interval Constraint (Default: 2 seconds)
-  if (currentMillis - lastPingTime >= ((unsigned long)networkPingIntervalSeconds * 1000)) {
-    lastPingTime = currentMillis;
-    
-    // 1. Fetch active dynamic configuration
-    IPAddress localIP = WiFi.localIP();
-    
-    for (int i = 0; i < authIPCount; i++) {
-      if (authIPs[i].lastQuad == 0) continue; 
-      
-      // 2. FIXED: Construct a raw un-mangled C-String format bypassing the constructor object bugs
-      String ipString = String(localIP[0]) + "." + 
-                        String(localIP[1]) + "." + 
-                        String(localIP[2]) + "." + 
-                        String(authIPs[i].lastQuad);
-      
-      // Convert to a standard character array reference pointer container
-      const char* rawTargetHost = ipString.c_str();
-      
-      // Debug verification logs
-      Serial.print("Issuing bypass raw-string ping to destination: ");
-      Serial.println(rawTargetHost);
-      
-      // 3. Execute network call via raw text string pointer override framework
-      if (Ping.ping(rawTargetHost, 1)) {
-        Serial.println(" -> SUCCESS! Target device online.");
-        
-        if (!authIPs[i].isOnline || (currentMillis - authIPs[i].lastSeen > 60000)) {
-          // Fresh arrival authentication trigger window reset
-          authIPs[i].firstSeen = currentMillis;
-        }
-        authIPs[i].lastSeen = currentMillis;
-        authIPs[i].isOnline = true;
-      } else {
-        Serial.println(" -> FAILED! Host unreachable.");
-        authIPs[i].isOnline = false;
-      }
-    }
-  }
-}
-*/
-/* 
-5th attempt
-void runNetworkPingScanner() {
-  unsigned long currentMillis = millis();
-  
-  // Dynamic User-Adjusted Interval Constraint (Default: 2 seconds)
-  if (currentMillis - lastPingTime >= ((unsigned long)networkPingIntervalSeconds * 1000)) {
-    lastPingTime = currentMillis;
-    
-    // 1. Fetch dynamic local configuration
-    IPAddress localIP = WiFi.localIP();
-    
-    // 2. CRITICAL ANTENNA FIX: Temporarily halt the Bluetooth scanning engine
-    // This immediately frees up the shared 2.4GHz antenna layer for Wi-Fi traffic.
-    if (pBLEScan != nullptr) {
-      pBLEScan->stop();
-    }
-    
-    // Allow the network driver stack 50 milliseconds to re-settle
-    delay(50); 
-    
-    for (int i = 0; i < authIPCount; i++) {
-      if (authIPs[i].lastQuad == 0) continue; 
-      
-      // Construct a clean, direct IPAddress structure
-      IPAddress targetIP(localIP[0], localIP[1], localIP[2], authIPs[i].lastQuad);
-      
-      Serial.print("Issuing antenna-isolated ping to: ");
-      Serial.println(targetIP);
-      
-      // Execute network call (Sends 1 packet with a fast response window)
-      if (Ping.ping(targetIP, 1)) {
-        Serial.println(" -> SUCCESS! Target device online.");
-        
-        if (!authIPs[i].isOnline || (currentMillis - authIPs[i].lastSeen > 60000)) {
-          authIPs[i].firstSeen = currentMillis;
-        }
-        authIPs[i].lastSeen = currentMillis;
-        authIPs[i].isOnline = true;
-      } else {
-        Serial.println(" -> FAILED! Host unreachable.");
-        authIPs[i].isOnline = false;
-      }
-    }
-
-    // 3. RESUME BLUETOOTH ENGINE: Hand the antenna back over to the BLE loop tracker
-    // Replace "3" with your current background Scan Slice/duration variable if it differs
-    if (pBLEScan != nullptr) {
-      pBLEScan->start(3, false); // Restarts non-blocking scans
-    }
-  }
-}
-*/
-/*
-6th? attempt
-void runNetworkPingScanner() {
-  unsigned long currentMillis = millis();
-
-  // Strict non-blocking constraint: Only execute if your interval has passed
-  if (currentMillis - lastPingTime >= ((unsigned long)networkPingIntervalSeconds * 1000)) {
-    lastPingTime = currentMillis;
-
-    IPAddress localIP = WiFi.localIP();
-    uint8_t myOwnLastQuad = localIP[3];  // Dynamically grabs the ESP32's last quad (e.g., 20)
-
-    // Temporarily pause BLE scans to clear the shared physical antenna
-    if (pBLEScan != nullptr) pBLEScan->stop();
-    delay(20);
-
-    for (int i = 0; i < authIPCount; i++) {
-      if (authIPs[i].lastQuad == 0) continue;
-
-      // Safety Override: Bypass self-pings entirely
-      if (authIPs[i].lastQuad == myOwnLastQuad) {
-        authIPs[i].lastSeen = currentMillis;
-        authIPs[i].isOnline = true;
-        continue;
-      }
-
-      // Assemble standard target destination properties
-      IPAddress targetIP(localIP[0], localIP[1], localIP[2], authIPs[i].lastQuad);
-
-      Serial.print("Issuing non-blocking ping to: ");
-      Serial.println(targetIP);
-
-      // Send 2 packet with a fast response window
-      if (Ping.ping(targetIP, 2)) {
-        Serial.println(" -> SUCCESS! Target device online.");
-        if (!authIPs[i].isOnline || (currentMillis - authIPs[i].lastSeen > 60000)) {
-          authIPs[i].firstSeen = currentMillis;
-        }
-        authIPs[i].lastSeen = currentMillis;
-        authIPs[i].isOnline = true;
-      } else {
-        Serial.println(" -> FAILED! Host unreachable.");
-        authIPs[i].isOnline = false;
-      }
-    }
-
-    // Resume Bluetooth tracking safely
-    if (pBLEScan != nullptr) pBLEScan->start(3, false);
-  }
-}
-
-*/
 
 // --- FreeRTOS Independent Task Engine For Network Pings ---
 void networkPingTaskEngine(void* parameter) {
@@ -2772,20 +2087,7 @@ void networkPingTaskEngine(void* parameter) {
 
         // Construct target address structure safely
         IPAddress targetIP(localIP[0], localIP[1], localIP[2], authIPs[i].lastQuad);
-        /* 
-        // Execute network check (Sends 2 packets with an explicit timeout)
-        if (Ping.ping(targetIP, 2)) {
-          // TRIPPED EDGE DETECTION: If it was previously offline, it has JUST arrived!
-          if (!authIPs[i].isOnline) {
-            triggerSecurityGate(authIPs[i].friendlyName); // Open the Alexa gate!
-            authIPs[i].firstSeen = millis();
-          }
-          authIPs[i].lastSeen = millis();
-          authIPs[i].isOnline = true;
-        } else {
-          authIPs[i].isOnline = false;
-        }
-        */
+ 
         // Execute network check (Sends 2 packets with an explicit timeout)
         if (Ping.ping(targetIP, 2)) {
           // Only trip the gate if it is newly online AND hasn't already opened the gate this trip
@@ -2813,26 +2115,6 @@ void networkPingTaskEngine(void* parameter) {
     vTaskDelay(pdMS_TO_TICKS(delaySeconds * 1000));
   }
 }
-/*
-void triggerSecurityGate(String newlyArrivedName) {
-  unsigned long now = millis();
-  
-  // If the gate is already open, concatenate the new name safely with " + "
-  if (securitySystemDisableAuthorised && (now - gateActivationTime < ((unsigned long)voiceGateOpenDurationSeconds * 1000))) {
-    if (authorisingDeviceNames.indexOf(newlyArrivedName) == -1) { // Prevent duplicates
-      authorisingDeviceNames += " + " + newlyArrivedName;
-    }
-  } else {
-    // Fresh standalone trigger window opening
-    securitySystemDisableAuthorised = true;
-    authorisingDeviceNames = newlyArrivedName;
-  }
-  
-  gateActivationTime = now; // Lock in or extend the countdown timer
-  Serial.print("🔒 VOICE SECURITY GATE TRIPPED BY: ");
-  Serial.println(authorisingDeviceNames);
-}
-*/
 
 void triggerSecurityGate(String newlyArrivedName, String deviceMac) {
   unsigned long now = millis();
