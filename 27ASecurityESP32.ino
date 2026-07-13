@@ -1,3 +1,24 @@
+// This AI Thread https://www.google.com/search?q=i+was+working+with+you+in+another+thread+on+ardiono+coding%2C+now+all+i+get+is+%22Something+went+wrong+and+the+content+wasn%27t+generated.%22&sourceid=chrome&ie=UTF-8&aep=82&amc=1&csuir=1&gs_lcrp=EgZjaHJvbWUqDwgAECMYJxjqAhjwBRieBjIPCAAQIxgnGOoCGPAFGJ4GMg8IARAjGCcY6gIY8AUYngYyDwgCECMYJxjqAhjwBRieBjIPCAMQIxgnGOoCGPAFGJ4GMg8IBBAjGCcY6gIY8AUYngYyFQgFEAAYQhi0AhjqAhjwBRieBhj2BtIBCTU3ODBqMGozM6gCBrACAQ&mstk=AUtExfAd1MCTYmiWxNeYIXFe0P49UfCAt9JxG0ZUkpTYQhznEifY3f-268gD2vUcUBQwmm2l_sUHVcOKK2vNz9RhUj33So-vbmGMfCzWobuf41R6-QtVOckTGclcLsns-0tV3eVZTTIPjAWXq3nbFAWZ5QZFYYdGboLqrF-cSRyTbenHcgJ9qrKP7dWD5tS2hzfXkI6ewgCVoJShKATYgPR6BlunJ5oZ1ukkjFgqR_Db19NffipgEFUqi-x-yDkCQuLwB8OSrAP4usUQP2k1bbOtEJ8R-GLkQjmG-VPEMLo4SvSqgvs3weskrzUXkTX5K0Z1XEXFqro3j5rzdg&oq=&cud=0&source=chrome.crn.obic&mtid=VvNOapCMK5Ky4-EPrNGLYQ&lns_mode=cvst&udm=50
+
+
+/*
+
+  // ==========================================
+  //  SORT DEVICES BY RSSI (Strongest First)
+  // ==========================================
+  for (int i = 0; i < deviceCount - 1; i++) {
+    for (int j = 0; j < deviceCount - i - 1; j++) {
+      // If the next device has a stronger/higher RSSI, swap them
+      if (discoveredDevices[j].rssi < discoveredDevices[j + 1].rssi) {
+        auto temp = discoveredDevices[j];
+        discoveredDevices[j] = discoveredDevices[j + 1];
+        discoveredDevices[j + 1] = temp;
+      }
+    }
+  }
+
+  */
+
 #include <WiFi.h>
 #include <WebServer.h>
 #include <WiFiUdp.h>
@@ -17,7 +38,7 @@ Preferences prefs;  // Instantiate the permanent storage core instance
 // Handle non-blocking timing loop for the OTA background processor
 unsigned long lastOtaCheck = 0;
 const unsigned long otaInterval = 50;  // Check for incoming code updates every 50ms
-
+String ProxyRequestText;
 // Bluetooth section
 
 int rssiThreshold = -90;         // Predefined threshold in dBm (closer to 0 is stronger) can be re defined on web page
@@ -337,6 +358,12 @@ class MyAdvertisedDeviceCallbacks : public BLEAdvertisedDeviceCallbacks {
           // --- THE SECURITY ACCESS TRIGGER GOES HERE ---
           Serial.println("\n[SECURITY TRIPPED]: Authorized device has returned after a full absence period!");
           Serial.printf("Device verified out of bounds for %lu minutes. ARRIVAL CHANNELS VALIDATED.\n", (missingTimeMs / 60000));
+         
+      ProxyRequestText = "Authorized device has returned";
+      ProxyPost();
+       ProxyRequestText = "Device verified out of bounds for %lu minutes";
+      ProxyPost();
+
 
           // Execute your actual Alexa Gate opener flag execution paths right here!
           // e.g., alexaGateTimerStart = millis(); gateAuthorised = true;
@@ -652,7 +679,7 @@ String LastRebootDate;
 String LastRebootTime;
 float UpTimeDays = 0;
 byte ProxyRequestID = 0;
-String ProxyRequestText;
+
 bool SetTimeWasSuccesfull;
 int DSTOffset = 1;
 
@@ -1720,6 +1747,20 @@ here to copy freeze hook structure
   html += "    <input type='submit' class='buttonsmall' style='padding: 3px 8px;' value='Update Window'>";
   html += "  </form>";
   html += "</div>";
+
+ // ==========================================
+  //  SORT DEVICES BY RSSI (Strongest First)
+  // ==========================================
+  for (int i = 0; i < deviceCount - 1; i++) {
+    for (int j = 0; j < deviceCount - i - 1; j++) {
+      // If the next device has a stronger/higher RSSI, swap them
+      if (discoveredDevices[j].rssi < discoveredDevices[j + 1].rssi) {
+        auto temp = discoveredDevices[j];
+        discoveredDevices[j] = discoveredDevices[j + 1];
+        discoveredDevices[j + 1] = temp;
+      }
+    }
+  }
 
   // ======================================================
   // TABLE 1: ACTIVE BLUETOOTH TOKENS (SCANNER)
