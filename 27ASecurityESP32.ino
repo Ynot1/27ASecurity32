@@ -16,13 +16,15 @@ Preferences prefs;  // Instantiate the permanent storage core instance
 
 // Handle non-blocking timing loop for the OTA background processor
 unsigned long lastOtaCheck = 0;
-const unsigned long otaInterval = 50; // Check for incoming code updates every 50ms
+const unsigned long otaInterval = 50;  // Check for incoming code updates every 50ms
 
 // Bluetooth section
 
 int rssiThreshold = -90;         // Predefined threshold in dBm (closer to 0 is stronger) can be re defined on web page
 int presenceWindowSeconds = 60;  // How long to remember a bluetooth device
 int scanSliceDuration = 3;       // Scanning duration slice in seconds
+int minAbsenceMinutes = 10;      // NEW Slider 4: Required absence time before re-entry is valid // This defaults in 10mins... Defined on web page
+//unsigned long requiredAbsenceMs = minAbsenceMinutes * 60 * 1000;
 
 #define SCAN_TIME 2
 
@@ -38,6 +40,15 @@ struct TrackedBeacon {
   String deviceType;         // <-- Add this to store the name/manufacturer
   String findMyFingerprint;  // <- Holds the fixed unique identifier payload
 };
+
+struct HistoricalDevice {
+  String identifier;            // Stores either the Static MAC or the Apple Find My Fingerprint key
+  unsigned long longGoneSince;  // The exact timestamp of when this specific device left the house
+};
+
+const int MAX_HISTORICAL = 10;  // Safe storage allocation size for family tokens
+HistoricalDevice departureHistory[MAX_HISTORICAL];
+int historicalCount = 0;
 
 // Structure for Authorised Tokens
 struct AuthorisedDevice {
@@ -56,6 +67,9 @@ struct AuthorisedIP {
   bool isOnline = false;        // Real-time ping state tracker
   bool hasTrippedGate = false;  // 👈 NEW: Latches the trigger state
 };
+
+
+
 
 #define MAX_AUTH_IPS 10
 AuthorisedIP authIPs[MAX_AUTH_IPS];
@@ -260,6 +274,7 @@ class MyAdvertisedDeviceCallbacks : public BLEAdvertisedDeviceCallbacks {
     unsigned long now = millis();
     bool found = false;
 
+    /*
     for (int i = 0; i < deviceCount; i++) {
       if ((payloadSignature != "" && discoveredDevices[i].findMyFingerprint == payloadSignature) || (payloadSignature == "" && discoveredDevices[i].macAddress == currentMac)) {
 
@@ -305,7 +320,44 @@ class MyAdvertisedDeviceCallbacks : public BLEAdvertisedDeviceCallbacks {
         break;
       }
     }
+*/
+    // Inside your MyAdvertisedDeviceCallbacks::onResult update memory matching engine:
+    found = false;
+    for (int i = 0; i < deviceCount; i++) {
+      if ((payloadSignature != "" && discoveredDevices[i].findMyFingerprint == payloadSignature) || (payloadSignature == "" && discoveredDevices[i].macAddress == currentMac)) {
 
+        unsigned long missingTimeMs = now - discoveredDevices[i].lastSeen;
+        unsigned long requiredAbsenceMs = (unsigned long)minAbsenceMinutes * 60 * 1000;
+
+
+        // Check Rule: Has the device been truly away for your full sustained slider duration?
+        if (missingTimeMs > requiredAbsenceMs) {
+          discoveredDevices[i].firstSeen = now;  // Reset arrival tracking timeline marker
+
+          // --- THE SECURITY ACCESS TRIGGER GOES HERE ---
+          Serial.println("\n[SECURITY TRIPPED]: Authorized device has returned after a full absence period!");
+          Serial.printf("Device verified out of bounds for %lu minutes. ARRIVAL CHANNELS VALIDATED.\n", (missingTimeMs / 60000));
+
+          // Execute your actual Alexa Gate opener flag execution paths right here!
+          // e.g., alexaGateTimerStart = millis(); gateAuthorised = true;
+
+        } else if (missingTimeMs > ((unsigned long)presenceWindowSeconds * 1000)) {
+          // The device was missing longer than your keep-alive window, but LESS than your 10-minute absence rule
+     //     Serial.println(cleanName);
+          Serial.println("\n[GATE SHIELD ACTIVE]: Token re-appeared but failed sustained absence duration check.");
+          Serial.println("Action: Suppressing arrival trigger spike. Marked as static edge flicker.");
+        }
+
+        // Keep updating running properties lines smoothly
+        discoveredDevices[i].macAddress = currentMac;
+        discoveredDevices[i].rssi = currentRssi;
+        discoveredDevices[i].lastSeen = now;
+        discoveredDevices[i].deviceType = manufacturer;
+        found = true;
+        break;
+      }
+    }
+    /*
     if (!found && deviceCount < MAX_DEVICES) {
       discoveredDevices[deviceCount].macAddress = currentMac;
       discoveredDevices[deviceCount].rssi = currentRssi;
@@ -316,6 +368,110 @@ class MyAdvertisedDeviceCallbacks : public BLEAdvertisedDeviceCallbacks {
       deviceCount++;
     }
   }
+
+  */
+    // --- MASTER SLOT RESERVATION FOR ALL NEW INCOMING DEVICE IDENTITIES ---
+    
+    if (!found && deviceCount < MAX_DEVICES) {
+     
+ unsigned long requiredAbsenceMs = (unsigned long)minAbsenceMinutes * 60 * 1000;
+      bool isGenuineArrival = false;
+      String uniqueID = currentMac;
+      uniqueID.toUpperCase();
+
+      // Query database registry bounds to confirm if this device is paired
+      bool isAnAuthorized2FAToken = false;
+      String matchedFriendlyName = "";
+
+      for (int k = 0; k < authDeviceCount; k++) {
+        String authMac = authDevices[k].macAddress;
+        authMac.toUpperCase();
+        if (authMac == uniqueID) {
+          isAnAuthorized2FAToken = true;
+          matchedFriendlyName = authDevices[k].friendlyName;
+          if (matchedFriendlyName == "") matchedFriendlyName = "Authorized 2FA Key";
+          break;
+        }
+      }
+
+      if (isAnAuthorized2FAToken) {
+        Serial.print("\n[DIAGNOSTIC] Re-Entry Ingestion: Paired Token (");
+        Serial.print(matchedFriendlyName);
+        Serial.print(") caught by radio. Checking history logs for ID: ");
+        Serial.println(uniqueID);
+      }
+
+      bool foundInHistory = false;
+
+      // Look through our automated historical memory registry
+      for (int h = 0; h < historicalCount; h++) {
+        if (departureHistory[h].identifier == uniqueID) {
+          foundInHistory = true;
+          unsigned long elapsedAwayTime = now - departureHistory[h].longGoneSince;
+          
+          Serial.print("[DIAGNOSTIC] Historical Entry Found! Target required: ");
+          Serial.print(requiredAbsenceMs / 1000);
+          Serial.print("s. Actual elapsed away time: ");
+          Serial.print(elapsedAwayTime / 1000);
+          Serial.println("s.");
+          
+          if (elapsedAwayTime > requiredAbsenceMs) {
+            isGenuineArrival = true;
+            Serial.println("[DIAGNOSTIC] MATCH SUCCESS: Away duration exceeded minimum absence rule window.");
+          } else {
+            Serial.println("[DIAGNOSTIC] MATCH FAILURE: Device re-entered too quickly. Suppressing arrival trigger.");
+          }
+          
+          // Clean Up historical tracking slot
+          for (int k = h; k < historicalCount - 1; k++) {
+            departureHistory[k] = departureHistory[k + 1];
+          }
+          historicalCount--;
+          break;
+        }
+      }
+
+      if (!foundInHistory && isAnAuthorized2FAToken) {
+        Serial.println("[DIAGNOSTIC] Warning: Device is in your 2FA list but was never found in the departure history logs!");
+      }
+
+      // 3. Evaluate safety action states strictly for paired 2FA devices
+      if (isAnAuthorized2FAToken) {
+        if (isGenuineArrival) {
+          discoveredDevices[deviceCount].firstSeen = now - 1000; // Trigger spike anchor
+          Serial.print("🌟 [SECURITY VALIDATED]: Fresh entry spike authenticated for: ");
+          Serial.println(matchedFriendlyName);
+          
+          // --- EXECUTE THE GATE UNLOCK ACTION PATHS ---
+          triggerSecurityGate(matchedFriendlyName, currentMac);
+          
+          // Find the device slot in your authDevices database and latch it true
+          for (int k = 0; k < authDeviceCount; k++) {
+            if (authDevices[k].macAddress == currentMac) {
+              authDevices[k].hasTrippedGate = true;
+              break;
+            }
+          }
+          
+        } else {
+          discoveredDevices[deviceCount].firstSeen = now;
+          Serial.print("⚠️ [SECURITY BYPASS]: ");
+          Serial.print(matchedFriendlyName);
+          Serial.println(" re-detected, but suppressed due to missing absence duration timeline gaps.");
+        }
+      } else {
+        discoveredDevices[deviceCount].firstSeen = now; // Standard tracking for ambient noise
+      }
+
+      // Commit fields down to your tracking structures
+      discoveredDevices[deviceCount].macAddress = currentMac;
+      discoveredDevices[deviceCount].rssi = currentRssi;
+      discoveredDevices[deviceCount].lastSeen = now;
+      discoveredDevices[deviceCount].deviceType = (isAnAuthorized2FAToken) ? matchedFriendlyName : manufacturer;
+      discoveredDevices[deviceCount].findMyFingerprint = payloadSignature; 
+      deviceCount++;
+    } // end of  if (!found && deviceCount < MAX_DEVICES) {
+  } // end of void onResult(BLEAdvertisedDevice advertisedDevice)
 };  // end of class MyAdvertisedDeviceCallbacks
 
 
@@ -347,6 +503,7 @@ void saveConfigurationToFlash() {
   prefs.putInt("arrivalLimit", maxArrivalAgeSeconds);
   prefs.putInt("pingInterval", networkPingIntervalSeconds);
   prefs.putInt("gateDuration", voiceGateOpenDurationSeconds);
+  prefs.putInt("absence", minAbsenceMinutes);
 
   // 2. Commit tracking counter totals
   prefs.putInt("btCount", authDeviceCount);
@@ -381,6 +538,7 @@ void loadConfigurationFromFlash() {
   maxArrivalAgeSeconds = prefs.getInt("arrivalLimit", 300);
   networkPingIntervalSeconds = prefs.getInt("pingInterval", 2);
   voiceGateOpenDurationSeconds = prefs.getInt("gateDuration", 60);
+  minAbsenceMinutes = prefs.getInt("absence", 10);
 
   // 2. Load total database counts
   authDeviceCount = prefs.getInt("btCount", 0);
@@ -708,7 +866,9 @@ void setup() {
   server.on("/SET", handleSet);
   server.on("/UNSET", handleUnSet);
 
-  // server.on("/setRadioParams", handleRadioParams);
+
+
+
 
   // ==========================================
   // MASTER ROOT PANEL RENDERING ENDPOINT
@@ -844,6 +1004,8 @@ void setup() {
     server.send(303);
   });
 
+
+
   // ==========================================
   // ROUTE: SAVE RADIO SLIDER SETTINGS
   // ==========================================
@@ -851,13 +1013,25 @@ void setup() {
     if (server.hasArg("rssi")) rssiThreshold = server.arg("rssi").toInt();
     if (server.hasArg("window")) presenceWindowSeconds = server.arg("window").toInt();
     if (server.hasArg("scantime")) scanSliceDuration = server.arg("scantime").toInt();
+    if (server.hasArg("absence")) minAbsenceMinutes = server.arg("absence").toInt();
+
 
     // 💾 BACKUP INSTANTLY
     saveConfigurationToFlash();
 
+    Serial.println("Parameters Updated successfully and pushed to Flash.");
+
+    // UNFREEZE HOOK: Unblock and fire the asynchronous scan back up safely
+    if (pBLEScan) {
+      pBLEScan->start(scanSliceDuration, nullptr, false);
+    }
+
     server.sendHeader("Location", "/");
     server.send(303);
   });
+
+  //server.on("/setRadioParams", handleRadioParams);
+
 
 
   server.begin();  // Always near the end of setup()
@@ -876,7 +1050,7 @@ void setup() {
   //Serial.println(F("FreeRTOS Asynchronous Pinger Thread Spawned!"));
 
 
-SetupWirelessOTA(); // Initialize your brand new wireless update channels
+  SetupWirelessOTA();  // Initialize your brand new wireless update channels
 
   Serial.println(F("end of void setup... Delaying 1 sec..."));
   delay(1000);
@@ -1101,7 +1275,7 @@ void loop() {
     }
     //Serial.println("----------------------------------");
 
-
+    /*
     // --- NEW: AUTOMATED ACTIVE BUFFER MANAGEMENT ---
     // Cleans out expired slots dynamically to keep your 20-device space open
     unsigned long maxAllowedAgeMs = (unsigned long)presenceWindowSeconds * 1000;
@@ -1118,21 +1292,87 @@ void loop() {
       }
     }
 
+*/
+    // --- AUTOMATED ACTIVE BUFFER MANAGEMENT WITH HISTORICAL EXPORT ---
+    unsigned long maxAllowedAgeMs = (unsigned long)presenceWindowSeconds * 1000;
+
+    for (int i = deviceCount - 1; i >= 0; i--) {
+ unsigned long elementAgeMs = currentMillis - discoveredDevices[i].lastSeen;
+      
+      if (elementAgeMs >= maxAllowedAgeMs) {
+        String currentCheckMac = discoveredDevices[i].macAddress;
+        currentCheckMac.toUpperCase();
+
+        // Query your real Authorised Devices database array list directly
+        bool isAValid2FAToken = false;
+        String verifiedFriendlyName = "";
+
+        for (int k = 0; k < authDeviceCount; k++) {
+          String authMac = authDevices[k].macAddress;
+          authMac.toUpperCase();
+          if (authMac == currentCheckMac) {
+            isAValid2FAToken = true;
+            verifiedFriendlyName = authDevices[k].friendlyName;
+            if (verifiedFriendlyName == "") verifiedFriendlyName = "Authorized 2FA Key";
+            break;
+          }
+        }
+
+        // Only write history files if this token has been explicitly paired via your dashboard
+        if (isAValid2FAToken) {
+          String historyUniqueID = currentCheckMac;
+
+          Serial.print("\n[DIAGNOSTIC] Main Array Expiry: Paired Token ");
+          Serial.print(verifiedFriendlyName);
+          Serial.print(" (ID: "); Serial.print(historyUniqueID);
+          Serial.println(") has expired out of the keep-alive window.");
+
+          // Check if this device already has an entry in our historical array
+          bool historyExists = false;
+          for (int h = 0; h < historicalCount; h++) {
+            if (departureHistory[h].identifier == historyUniqueID) {
+              departureHistory[h].longGoneSince = discoveredDevices[i].lastSeen; // Update exit mark
+              historyExists = true;
+              Serial.println("[DIAGNOSTIC] History Updated: Existing historical timestamp overwritten.");
+              break;
+            }
+          }
+
+          // If it's a new departure profile, create a tracking record slot
+          if (!historyExists && historicalCount < MAX_HISTORICAL) {
+            departureHistory[historicalCount].identifier = historyUniqueID;
+            departureHistory[historicalCount].longGoneSince = discoveredDevices[i].lastSeen;
+            historicalCount++;
+            
+            Serial.print("[DIAGNOSTIC] History Added: Saved to historical array index slot: ");
+            Serial.println(historicalCount - 1);
+          }
+        }
+
+        // Shift remaining array slots left to overwrite the expired visual layout row entry
+        for (int j = i; j < deviceCount - 1; j++) {
+          discoveredDevices[j] = discoveredDevices[j + 1];
+        }
+        deviceCount--; 
+      }
+    } // end of for (int i = deviceCount - 1; i >= 0; i--) {
     lastBleCycle = currentMillis;
   }
-/*
+
+
+
   // Light weight non-blocking OTA execution handle loop
   if (millis() - lastOtaCheck >= otaInterval) {
-    ArduinoOTA.handle(); // Checks the Wi-Fi card for any incoming update binaries
+    ArduinoOTA.handle();  // Checks the Wi-Fi card for any incoming update binaries
     lastOtaCheck = millis();
   }
-*/
+  
 
-ArduinoOTA.handle(); // Checks the Wi-Fi card for any incoming update binaries
+    ArduinoOTA.handle();  // Checks the Wi-Fi card for any incoming update binaries
 
   delay(1);  // Small safety yield to prevent watchdog resets
 
-}  // end Void Loop
+}  // end void Loop
 
 
 void handleRoot() {
@@ -1155,7 +1395,7 @@ if (request->hasArg("key")) {
   Serial.println("No 'key' argument found in URL");
 }
 */
- 
+
   // Start building your HTML response string
   // --- START OF HTML WEB PAGE ---
   String html = "<!DOCTYPE html>\n<html>\n<head>\n";
@@ -1258,7 +1498,7 @@ works, but irrelevant
     html += "<p>Current Security System Status: <strong> SET (enabled/on) </strong></p>";
     html += "<p><a href=\"UNSET\"><button class=\"button button2\">UnSET Alarm</button></a></p>";
   }
-
+  /*
   // --- STREAMLINED FILTER CONTROLLER BOX (CONVERTED TO TEXT ENTRY WITH FREEZE HOOKS) ---
   html += "<div style='text-align: center; margin: 10px auto; padding: 10px; width: 90%; max-width: 380px; border: 1px solid #bbb; border-radius: 6px; font-size: 0.9em; background-color: #f9f9f9;'>";
   html += "  <h5 style='margin: 0 0 8px 0;'>Bluetooth Radio & Filter Settings</h5>";
@@ -1291,6 +1531,75 @@ works, but irrelevant
   html += "    <input type='submit' class='buttonsmall' style='padding: 4px 15px; font-size: 0.85em; cursor: pointer;' value='Apply Changes'>";
   html += "  </form>";
   html += "</div>";
+*/
+  /*
+  // --- COMPACT 4-PARAMETER FILTER CONTROLLER BOX WITH FREEZE HOOKS ---
+  html += "<div style='text-align: center; margin: 10px auto; padding: 10px; width: 90%; max-width: 380px; border: 1px solid #bbb; border-radius: 6px; font-size: 0.85em; background-color: #f9f9f9;'>";
+  html += "  <h5 style='margin: 0 0 6px 0; font-size: 1.1em;'>BluetoothRadio & Filter Settings</h5>";
+  html += "  <form action='/setRadioParams' method='GET' onsubmit='if(pBLEScan){pBLEScan->stop();}'>";
+  
+  // Slider 1: RSSI Sensitivity
+  html += "    <div style='margin-bottom: 5px;'>";
+  html += "      <label style='display:block; margin-bottom:1px;'>Gate: <b>" + String(rssiThreshold) + " dBm</b></label>";
+  html += "      <input type='range' name='rssi' min='-100' max='-10' step='1' value='" + String(rssiThreshold) + "' style='width: 85%; height: 3px;'>";
+  html += "    </div>";
+  
+  // Slider 2: Detection Window Timeout
+  html += "    <div style='margin-bottom: 5px;'>";
+  html += "      <label style='display:block; margin-bottom:1px;'>Keep-Alive Window: <b>" + String(presenceWindowSeconds) + "s</b></label>";
+  html += "      <input type='range' name='window' min='10' max='300' step='5' value='" + String(presenceWindowSeconds) + "' style='width: 85%; height: 3px;'>";
+  html += "    </div>";
+  
+  // Slider 3: Scan Slice Duration
+  html += "    <div style='margin-bottom: 5px;'>";
+  html += "      <label style='display:block; margin-bottom:1px;'>Scan Slice: <b>" + String(scanSliceDuration) + "s</b></label>";
+  html += "      <input type='range' name='scantime' min='1' max='10' step='1' value='" + String(scanSliceDuration) + "' style='width: 85%; height: 3px;'>";
+  html += "    </div>";
+  
+  // Slider 4: Absence Lockout Window
+  html += "    <div style='margin-bottom: 8px;'>";
+  html += "      <label style='display:block; margin-bottom:1px;'>Min Absence Rule: <b>" + String(minAbsenceMinutes) + " mins</b></label>";
+  html += "      <input type='range' name='absence' min='1' max='60' step='1' value='" + String(minAbsenceMinutes) + "' style='width: 85%; height: 3px;'>";
+  html += "    </div>";
+  
+  html += "    <input type='submit' class='buttonsmall' style='padding: 3px 8px; font-size: 0.8em;' value='Apply Changes'>";
+  html += "  </form>";
+  html += "</div>";
+  */
+  /*
+
+  // --- COMPACT 4-PARAMETER TEXT BOX CONTROLLER WITH BROWSER INTERRUPT HOOKS ---
+  html += "<div style='text-align: center; margin: 10px auto; padding: 10px; width: 90%; max-width: 380px; border: 1px solid #bbb; border-radius: 6px; font-size: 0.85em; background-color: #f9f9f9;'>";
+  html += "  <h5 style='margin: 0 0 6px 0; font-size: 1.1em;'>Radio & Safety Tweaks</h5>";
+  html += "  <form action='/setRadioParams' method='GET' onsubmit='freezeUpdates();'>";
+  
+  // Input 1: RSSI Sensitivity
+  html += "    <div style='margin-bottom: 6px;'>";
+  html += "      <label style='display:inline-block; width:180px; text-align:left;'>Gate Sensitivity (dBm):</label>";
+  html += "      <input type='text' class='param-input' name='rssi' value='" + String(rssiThreshold) + "' style='width: 50px; padding: 2px; text-align: center;' onfocus='isTyping=true;' onblur='isTyping=false;'>";
+  html += "    </div>";
+  
+  // Input 2: Detection Window Timeout
+  html += "    <div style='margin-bottom: 6px;'>";
+  html += "      <label style='display:inline-block; width:180px; text-align:left;'>Keep-Alive Window (s):</label>";
+  html += "      <input type='text' class='param-input' name='window' value='" + String(presenceWindowSeconds) + "' style='width: 50px; padding: 2px; text-align: center;' onfocus='isTyping=true;' onblur='isTyping=false;'>";
+  html += "    </div>";
+  
+  // Input 3: Scan Slice Duration
+  html += "    <div style='margin-bottom: 6px;'>";
+  html += "      <label style='display:inline-block; width:180px; text-align:left;'>Scan Slice length (s):</label>";
+  html += "      <input type='text' class='param-input' name='scantime' value='" + String(scanSliceDuration) + "' style='width: 50px; padding: 2px; text-align: center;' onfocus='isTyping=true;' onblur='isTyping=false;'>";
+  html += "    </div>";
+  
+  // Input 4: Minimum Absence Rule
+  html += "    <div style='margin-bottom: 10px;'>";
+  html += "      <label style='display:inline-block; width:180px; text-align:left;'>Min Absence Rule (mins):</label>";
+  html += "      <input type='text' class='param-input' name='absence' value='" + String(minAbsenceMinutes) + "' style='width: 50px; padding: 2px; text-align: center;' onfocus='isTyping=true;' onblur='isTyping=false;'>";
+  html += "    </div>";
+  
+  html += "    <input type='submit' class='buttonsmall' style='padding: 4px 12px; font-size: 0.85em;' value='Apply Changes'>";
+  html += "  </form>";
+  html += "</div>";
 
   // ==========================================
   //  SORT DEVICES BY RSSI (Strongest First)
@@ -1305,15 +1614,112 @@ works, but irrelevant
       }
     }
   }
+*/
+
+  /* 
+here to copy freeze hook structure
+    // ======================================================
+  // UPDATED: SETTINGS CONFIGURATION FORM (FREEZE-SAFE OVERRIDES)
+  // ======================================================
+  html += "<div style='margin: 20px auto; width: 95%; max-width: 700px; text-align: center; border: 1px dashed #666; padding: 15px; background-color: #fff;'>";
+  //html += "<form action='/save-settings' method='POST'>"; I think this should be GET
+  html += "<form action='/save-settings' method='GET'>"; I think this should be GET
+  
+  // 1. ACTIVE PRESENCE FIELD
+  html += "<div style='display: inline-block; margin: 5px 10px;'><b>Active Presence: </b>"
+          "<input type='number' name='window' value='"
+          + String(authTimeWindowSeconds) + "' style='width:50px; text-align:center;' "
+                                            "onfocus=\"sessionStorage.setItem('typing', 'true');\" "
+                                            "onblur=\"sessionStorage.removeItem('typing');\">s</div>";
+  
+  
+  
+   html += "    <input type='submit' class='buttonsmall' style='padding: 4px 15px; font-size: 0.85em; cursor: pointer;' value='Apply Changes'>";
+  //html += "<div style='margin-top: 15px;'><input type='submit' value='Save All Settings' style='padding: 6px 20px; font-weight: bold; background-color: #333; color: white; border: none; cursor: pointer;'></div>";
+  html += "</form></div>";
+
+  
+  */
   // ======================================================
   // NEW: SETTINGS CONFIGURATION FORM (Adjustable Time Window)
   // ======================================================
+  /*
   html += "<div style='margin: 20px auto; width: 95%; max-width: 650px; text-align: center; border: 1px dashed #666; padding: 10px;'>";
   html += "<form action='/save-settings' method='GET'>";
   html += "<b>Bluetooth & Ping Device 2FA Authorisation Window: </b>";
   html += "<input type='number' name='window' value='" + String(authTimeWindowSeconds) + "' style='width:60px; text-align:center;'> seconds ";
+    //This needs freeze hooks
+                                             "onfocus=\"sessionStorage.setItem('typing', 'true');\" "
+                                            "onblur=\"sessionStorage.removeItem('typing');\">s</div>";
   html += "<input type='submit' value='Update Window'>";
   html += "</form></div>";
+*/
+
+
+  // --- COMPACT 4-PARAMETER TEXT BOX CONTROLLER (FIXED FOR SESSIONSTORAGE) ---
+  html += "<div style='text-align: center; margin: 10px auto; padding: 10px; width: 90%; max-width: 380px; border: 1px solid #bbb; border-radius: 6px; font-size: 0.85em; background-color: #f9f9f9;'>";
+  html += "  <h5 style='margin: 0 0 6px 0; font-size: 1.1em;'>Bluetooth Radio and Filter Settings</h5>";  // Renamed as requested
+  html += "  <form action='/setRadioParams' method='GET' onsubmit=\"sessionStorage.setItem('typing', 'true');\">";
+
+  // Input 1: RSSI Sensitivity
+  html += "    <div style='margin-bottom: 6px;'>";
+  html += "      <label style='display:inline-block; width:180px; text-align:left;'>Gate Sensitivity (dBm):</label>";
+  html += "      <input type='text' name='rssi' value='" + String(rssiThreshold) + "' style='width: 50px; padding: 2px; text-align: center;' onfocus=\"sessionStorage.setItem('typing', 'true');\" onblur=\"sessionStorage.removeItem('typing');\">";
+  html += "    </div>";
+
+  // Input 2: Detection Window Timeout
+  html += "    <div style='margin-bottom: 6px;'>";
+  html += "      <label style='display:inline-block; width:180px; text-align:left;'>Keep-Alive Window (s):</label>";
+  html += "      <input type='text' name='window' value='" + String(presenceWindowSeconds) + "' style='width: 50px; padding: 2px; text-align: center;' onfocus=\"sessionStorage.setItem('typing', 'true');\" onblur=\"sessionStorage.removeItem('typing');\">";
+  html += "    </div>";
+
+  // Input 3: Scan Slice Duration
+  html += "    <div style='margin-bottom: 6px;'>";
+  html += "      <label style='display:inline-block; width:180px; text-align:left;'>Scan Slice length (s):</label>";
+  html += "      <input type='text' name='scantime' value='" + String(scanSliceDuration) + "' style='width: 50px; padding: 2px; text-align: center;' onfocus=\"sessionStorage.setItem('typing', 'true');\" onblur=\"sessionStorage.removeItem('typing');\">";
+  html += "    </div>";
+
+  // Input 4: Minimum Absence Rule
+  html += "    <div style='margin-bottom: 10px;'>";
+  html += "      <label style='display:inline-block; width:180px; text-align:left;'>Min Absence Rule (mins):</label>";
+  html += "      <input type='text' name='absence' value='" + String(minAbsenceMinutes) + "' style='width: 50px; padding: 2px; text-align: center;' onfocus=\"sessionStorage.setItem('typing', 'true');\" onblur=\"sessionStorage.removeItem('typing');\">";
+
+  html += "    </div>";
+
+  html += "    <input type='submit' class='buttonsmall' style='padding: 4px 12px; font-size: 0.85em;' value='Apply Changes'>";
+  html += "  </form>";
+  html += "</div>";
+
+  /*
+  html += "<div style='margin: 20px auto; width: 95%; max-width: 650px; text-align: center; border: 1px dashed #666; padding: 10px;'>";
+  html += "  <form action='/save-settings' method='GET' onsubmit='isTyping=true;'>";
+  html += "    <b>Bluetooth & Ping Device 2FA Authorisation Window: </b>";
+  
+  // Notice the closing angle bracket (>) is removed from this line so we can append our hooks inside the tag:
+  html += "    <input type='number' name='window' value='" + String(authTimeWindowSeconds) + "' style='width:60px; text-align:center;' ";
+  
+  // Correctly assign the string pieces and toggle the shared 'isTyping' variable
+  html += "onfocus='isTyping=true;' ";
+  html += "onblur='isTyping=false;'> seconds ";
+  
+  html += "    <input type='submit' class='buttonsmall' style='padding: 3px 8px;' value='Update Window'>";
+  html += "  </form>";
+  html += "</div>";
+*/
+
+  // --- COMPACT 2FA BOX (FIXED FOR SESSIONSTORAGE) ---
+  html += "<div style='margin: 20px auto; width: 95%; max-width: 650px; text-align: center; border: 1px dashed #666; padding: 10px;'>";
+  html += "  <form action='/save-settings' method='GET' onsubmit=\"sessionStorage.setItem('typing', 'true');\">";
+  html += "    <b>Bluetooth & Ping Device 2FA Authorisation Window: </b>";
+
+  // Keep the tag completely open until all event triggers are inside
+  html += "    <input type='number' name='window' value='" + String(authTimeWindowSeconds) + "' style='width:60px; text-align:center;' ";
+  html += "onfocus=\"sessionStorage.setItem('typing', 'true');\" ";
+  html += "onblur=\"sessionStorage.removeItem('typing');\"> seconds ";
+
+  html += "    <input type='submit' class='buttonsmall' style='padding: 3px 8px;' value='Update Window'>";
+  html += "  </form>";
+  html += "</div>";
 
   // ======================================================
   // TABLE 1: ACTIVE BLUETOOTH TOKENS (SCANNER)
@@ -1378,7 +1784,8 @@ works, but irrelevant
   // UPDATED: SETTINGS CONFIGURATION FORM (FREEZE-SAFE OVERRIDES)
   // ======================================================
   html += "<div style='margin: 20px auto; width: 95%; max-width: 700px; text-align: center; border: 1px dashed #666; padding: 15px; background-color: #fff;'>";
-  html += "<form action='/save-settings' method='POST'>";
+  //html += "<form action='/save-settings' method='POST'>"; I think this should be GET
+  html += "<form action='/save-settings' method='GET'>";  // I think this should be GET
 
   // 1. ACTIVE PRESENCE FIELD
   html += "<div style='display: inline-block; margin: 5px 10px;'><b>Active Presence: </b>"
@@ -2102,7 +2509,7 @@ void networkPingTaskEngine(void* parameter) {
 
         // Construct target address structure safely
         IPAddress targetIP(localIP[0], localIP[1], localIP[2], authIPs[i].lastQuad);
- 
+
         // Execute network check (Sends 2 packets with an explicit timeout)
         if (Ping.ping(targetIP, 2)) {
           // Only trip the gate if it is newly online AND hasn't already opened the gate this trip
@@ -2186,7 +2593,7 @@ void SetupWirelessOTA() {
     Serial.println("\n--- OTA ALERT: Wireless Update Started ---");
     Serial.println("Updating " + type);
 
-    // CRITICAL: Kill the Bluetooth background radio instantly to free up 100% 
+    // CRITICAL: Kill the Bluetooth background radio instantly to free up 100%
     // of the antenna bandwidth for the incoming Wi-Fi upload!
     if (pBLEScan) {
       pBLEScan->stop();
@@ -2196,7 +2603,7 @@ void SetupWirelessOTA() {
 
   ArduinoOTA.onError([](ota_error_t error) {
     Serial.printf("OTA Error [%u]\n", error);
-    
+
     // FALLBACK: If the download fails, restart the Bluetooth scanner automatically
     if (pBLEScan) {
       pBLEScan->start(scanSliceDuration, nullptr, false);
@@ -2206,4 +2613,51 @@ void SetupWirelessOTA() {
   // Launch the background wireless network listeners
   ArduinoOTA.begin();
   Serial.println("System Alert: Wireless OTA Network Listeners Active.");
+}
+/*
+void handleRadioParams() {
+  if (server.hasArg("rssi"))      rssiThreshold = server.arg("rssi").toInt();
+  if (server.hasArg("window"))    presenceWindowSeconds = server.arg("window").toInt();
+  if (server.hasArg("scantime"))  scanSliceDuration = server.arg("scantime").toInt();
+  if (server.hasArg("absence"))   minAbsenceMinutes = server.arg("absence").toInt();
+
+  Serial.println("Parameters Updated successfully.");
+
+  // UNFREEZE HOOK: Unblock and fire the asynchronous scan back up safely 
+  if (pBLEScan) {
+    pBLEScan->start(scanSliceDuration, nullptr, false);
+  }
+
+  server.sendHeader("Location", "/");
+  server.send(303, "text/plain", "Redirecting...");
+}*/
+void handleRadioParams() {
+  // 1. HARDWARE FREEZE HOOK: Pause background scanner for safe flash writing
+  if (pBLEScan) {
+    pBLEScan->stop();
+  }
+
+  // 2. Extract values from text box inputs safely
+  if (server.hasArg("rssi")) rssiThreshold = server.arg("rssi").toInt();
+  if (server.hasArg("window")) presenceWindowSeconds = server.arg("window").toInt();
+  if (server.hasArg("scantime")) scanSliceDuration = server.arg("scantime").toInt();
+  if (server.hasArg("absence")) minAbsenceMinutes = server.arg("absence").toInt();
+
+  // 3. LOCK DOWN TO NON-VOLATILE MEMORY (Preferences)
+  prefs.putInt("rssi", rssiThreshold);
+  prefs.putInt("window", presenceWindowSeconds);
+  prefs.putInt("scantime", scanSliceDuration);
+  prefs.putInt("absence", minAbsenceMinutes);  // Saves the setting permanently!
+
+  Serial.println("Parameters secured to NVM storage registers successfully.");
+
+  // 4. HARDWARE UNFREEZE HOOK: Resume scanning with your live values
+  if (pBLEScan) {
+    pBLEScan->clearResults();
+    pBLEScan->start(scanSliceDuration, nullptr, false);
+  }
+
+  // Redirect back to dashboard root instantly
+  server.sendHeader("Location", "/");
+  server.send(303, "text/plain", "Redirecting...");
 }
