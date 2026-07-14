@@ -35,6 +35,12 @@ Preferences prefs;  // Instantiate the permanent storage core instance
 #include <BLEScan.h>
 #include <BLEAdvertisedDevice.h>
 
+#include <HTTPClient.h>
+
+
+
+
+
 //bool wifiSmartphonePresent = false;  // True when any paired 2FA phone is alive on Wi-Fi
 String wifiSmartphoneFriendlyName = ""; // Empty string when no cellphones are home
 
@@ -104,8 +110,16 @@ struct AuthorisedIP {
   bool hasTrippedGate = false;  // 👈 NEW: Latches the trigger state
 };
 
+// Fixed-size structure to guarantee zero memory fragmentation over long runs
+struct CachedManufacturer {
+  char prefix[9];      // Holds "XX:XX:XX\0" (8 characters + null terminator)
+  char vendorName[32]; // Space for a clean 31-character brand descriptor string
+};
 
-
+const int MAX_CACHED_VENDORS = 50; // Cap at 50 slots to protect your dynamic RAM limits
+CachedManufacturer vendorCache[MAX_CACHED_VENDORS];
+int vendorCacheCount = 0;
+int nextCacheSlot = 0;             // Tracks the circular FIFO index pointer
 
 #define MAX_AUTH_IPS 10
 AuthorisedIP authIPs[MAX_AUTH_IPS];
@@ -135,7 +149,8 @@ unsigned long lastPingTime = 0;      // Tracks non-blocking network thread cycle
 int networkPingIntervalSeconds = 2;  // 👈 NEW: User-adjustable ping delay (Default: 2s)
 
 // ****** GLOBAL FUNCTIONS & Classes
-
+/*
+old hardcoded way 
 String IdentifyManufacturer(String macAddress) {
   macAddress.toUpperCase();
 
@@ -242,6 +257,134 @@ String IdentifyManufacturer(String macAddress) {
 
   // Final catch-all if it survives all hardcoded vendor rules and privacy checks
   return "Unknown Brand";
+}
+
+*/
+
+String FetchVendorFromAPI(String prefix) {
+  // Strip colons out to match the clean API format (e.g., "001632" instead of "00:16:32")
+  String cleanPrefix = prefix;
+  cleanPrefix.replace(":", "");
+  cleanPrefix.trim();
+
+  if (WiFi.status() != WL_CONNECTED) return "Unknown Brand";
+  
+  HTTPClient http;
+  // Modern, highly stable, free open-source API endpoint
+  String url = "https://mac2vendor.com" + cleanPrefix;
+  
+  http.begin(url);
+  http.setTimeout(1200); // 1.2s strict timeout protection to shield scanner loops
+  int httpCode = http.GET();
+  
+  String result = "Unknown Brand";
+  
+  if (httpCode == HTTP_CODE_OK) {
+    result = http.getString();
+    result.trim();
+    
+    // Safety check: Make sure the API didn't return an empty string or error layout
+    if (result.length() == 0 || result.indexOf("not found") != -1 || result.indexOf("Error") != -1) {
+      result = "Unknown Brand";
+    } else {
+      // Shorten corporate titles so they look clean in your web dashboard table rows
+      if (result.indexOf("Samsung") != -1) result = "Samsung Device";
+      else if (result.indexOf("Apple") != -1) result = "Apple Device";
+      else if (result.indexOf("Sony") != -1) result = "Sony Device";
+      else if (result.indexOf("Huawei") != -1) result = "Huawei Device";
+      else if (result.indexOf("Google") != -1) result = "Google Device";
+      else if (result.indexOf("Intel") != -1) result = "Intel Device";
+      
+      // Enforce our 31-character buffer safety boundary limit
+      if (result.length() > 30) result = result.substring(0, 30);
+    }
+  } else {
+    // Log network error codes straight to serial for bench tracking
+    Serial.printf("[API ERROR]: HTTP Fetch Failed. Error Code: %d\n", httpCode);
+    result = "Searching..."; // Temporary tag so it tries again on the next pass
+  }
+  
+  http.end();
+  return result;
+}
+
+String IdentifyManufacturer(String macAddress) {
+  // Ensure the string is forced uppercase right at the front gate
+  macAddress.toUpperCase();
+
+  // ========================================================
+  // 1. DIRECT HARDCODED MATCHES (Preserved perfectly)
+  // ========================================================
+  if (macAddress == "38:F9:D3:19:96:BA") return "Tony's MacBook";
+  if (macAddress == "84:B1:E4:08:62:AB") return "Tony's IPHONE13";
+  if (macAddress == "10:00:20:72:5B:7A") return "Tony's iPad (3)";
+
+  // Extract the standard 8-character OUI prefix (e.g., "00:16:32")
+  String prefix = macAddress.substring(0, 8);
+
+  // ========================================================
+  // 2. IN-MEMORY LOCAL OUI CACHE LOOKUP (Instant check)
+  // ========================================================
+  for (int i = 0; i < vendorCacheCount; i++) {
+    if (String(vendorCache[i].prefix) == prefix) {
+      return String(vendorCache[i].vendorName); // Cache hit! Bypasses web entirely
+    }
+  }
+
+  // ========================================================
+  // 3. PRIVACY BIT FILTER (Preserved & combined uppercase/lowercase checks)
+  // Checks the 2nd character of the MAC string for randomized privacy flags
+  // ========================================================
+  char privateChar = macAddress.charAt(1);
+
+  if (privateChar == 'B' || privateChar == 'b' || privateChar == 'F' || privateChar == 'f' || privateChar == '9') {
+    return "Randomised Private Smartphone/Tablet";
+  }
+
+  if (privateChar == '2' || privateChar == '3' || privateChar == '6' || privateChar == '5' || 
+      privateChar == '7' || privateChar == 'A' || privateChar == 'a' || privateChar == 'E' || privateChar == 'e') {
+    return "Locally Administered / Private Randomized";
+  }
+
+  // ========================================================
+  // 4. CACHE MISSED & PRIVACY PASSED: Execute automated internet lookup
+  // ========================================================
+  if (vendorCacheCount < MAX_CACHED_VENDORS) {
+    Serial.printf("[CACHE MISSED]: Resolving unknown prefix %s via Web API...\n", prefix.c_str());
+    
+    String parsedVendor = FetchVendorFromAPI(prefix);
+    
+    // Only lock the entry down to flash if the internet connection successfully resolved a name
+    if (parsedVendor != "Unknown Brand" && parsedVendor != "Searching...") {
+      int targetSlot = nextCacheSlot; 
+
+      // Copy strings securely into your permanent character array matrices
+      strncpy(vendorCache[targetSlot].prefix, prefix.c_str(), sizeof(vendorCache[targetSlot].prefix) - 1);
+      vendorCache[targetSlot].prefix[sizeof(vendorCache[targetSlot].prefix) - 1] = '\0';
+      
+      strncpy(vendorCache[targetSlot].vendorName, parsedVendor.c_str(), sizeof(vendorCache[targetSlot].vendorName) - 1);
+      vendorCache[targetSlot].vendorName[sizeof(vendorCache[targetSlot].vendorName) - 1] = '\0';
+      
+      // Scale dynamic array occupancy until it ceilings out at 50 slots
+      if (vendorCacheCount < MAX_CACHED_VENDORS) {
+        vendorCacheCount++;
+      }
+
+      // Roll the FIFO pointer forward circularly
+      nextCacheSlot++;
+      if (nextCacheSlot >= MAX_CACHED_VENDORS) {
+        nextCacheSlot = 0; 
+        Serial.println("[CACHE NOTICE]: Buffer full. FIFO recycling index back to slot 0.");
+      }
+      
+      saveVendorToCacheFlash(targetSlot); // Lock changes instantly to Preferences memory cells
+      return parsedVendor;
+    }
+    
+    return parsedVendor; // Returns "Searching..." or "Unknown Brand" temporarily
+  }
+
+  return "Unknown Brand"; // Default catch-all fallback if storage capacity maxes out
 }
 
 class MyAdvertisedDeviceCallbacks : public BLEAdvertisedDeviceCallbacks {
@@ -626,7 +769,37 @@ void loadConfigurationFromFlash() {
   Serial.println("🔄 SUCCESS: Authorization databases recovered from onboard Flash.");
 }
 
+void loadVendorCache() {
+  prefs.begin("mfg_cache", true); // Open separate isolated namespace as read-only
+  vendorCacheCount = prefs.getInt("count", 0);
+  nextCacheSlot    = prefs.getInt("next_slot", 0); // Restore FIFO pointer on boot
+  
+  if (vendorCacheCount > MAX_CACHED_VENDORS) vendorCacheCount = MAX_CACHED_VENDORS;
+  if (nextCacheSlot >= MAX_CACHED_VENDORS) nextCacheSlot = 0;
+  
+  for (int i = 0; i < vendorCacheCount; i++) {
+    String savedPfx = prefs.getString(("p" + String(i)).c_str(), "");
+    String savedVnd = prefs.getString(("v" + String(i)).c_str(), "Unknown");
+    
+    // Safely copy string data directly into your permanent struct buffers
+    strncpy(vendorCache[i].prefix, savedPfx.c_str(), sizeof(vendorCache[i].prefix) - 1);
+    vendorCache[i].prefix[sizeof(vendorCache[i].prefix) - 1] = '\0'; // Enforce null termination
+    
+    strncpy(vendorCache[i].vendorName, savedVnd.c_str(), sizeof(vendorCache[i].vendorName) - 1);
+    vendorCache[i].vendorName[sizeof(vendorCache[i].vendorName) - 1] = '\0';
+  }
+  prefs.end();
+  Serial.printf("[NVM CACHE]: Restored %d dynamic profiles. Next FIFO slot: %d\n", vendorCacheCount, nextCacheSlot);
+}
 
+void saveVendorToCacheFlash(int index) {
+  prefs.begin("mfg_cache", false); // Open namespace in read/write mode
+  prefs.putString(("p" + String(index)).c_str(), vendorCache[index].prefix);
+  prefs.putString(("v" + String(index)).c_str(), vendorCache[index].vendorName);
+  prefs.putInt("count", vendorCacheCount);
+  prefs.putInt("next_slot", nextCacheSlot); // Secure the trailing circular pointer
+  prefs.end();
+}
 
 
 // original security system interface code  here
@@ -750,6 +923,9 @@ void setup() {
   delay(1000);
 
   loadConfigurationFromFlash();
+
+  // Hydrate your dinámica dynamic OUI manufacturer database from flash cell memories
+  loadVendorCache();
 
   //flash fast a few times to indicate CPU is booting
   digitalWrite(LedPin, LOW);
@@ -1140,6 +1316,8 @@ void setup() {
 
 
   SetupWirelessOTA();  // Initialize your brand new wireless update channels
+
+
 
   Serial.println(F("end of void setup... Delaying 1 sec..."));
   delay(1000);
@@ -3392,7 +3570,7 @@ void EvaluateSecurityGateState() {
     authorisingDeviceNames = "Scanning...";
     currentGateState = GATE_AUTO_CLOSED; // Sync state tracking Enum ID to 0
   }
-
+/*
   // =========================================================================
   // 🔍 PRODUCTION GATE DIAGNOSTIC PRINTER 
   // =========================================================================
@@ -3411,4 +3589,6 @@ void EvaluateSecurityGateState() {
                   timeElapsedSec, remaining, voiceGateOpenDurationSeconds);
     Serial.println("-------------------------------------------------");
   }
+
+  */
 }
