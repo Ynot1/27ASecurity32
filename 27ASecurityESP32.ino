@@ -35,6 +35,8 @@ Preferences prefs;  // Instantiate the permanent storage core instance
 #include <BLEScan.h>
 #include <BLEAdvertisedDevice.h>
 
+bool wifiSmartphonePresent = false;  // True when any paired 2FA phone is alive on Wi-Fi
+
 // Handle non-blocking timing loop for the OTA background processor
 unsigned long lastOtaCheck = 0;
 const unsigned long otaInterval = 50;  // Check for incoming code updates every 50ms
@@ -48,6 +50,18 @@ int minAbsenceMinutes = 10;      // NEW Slider 4: Required absence time before r
 //unsigned long requiredAbsenceMs = minAbsenceMinutes * 60 * 1000;
 
 #define SCAN_TIME 2
+
+// Define our 4 distinct operational gate states
+enum GateStateMode {
+  GATE_AUTO_CLOSED = 0,  // Normal Auto: Closed (Locks verbal commands if tokens absent)
+  GATE_AUTO_OPEN = 1,    // Normal Auto: Open (Tokens detected, verbal commands allowed)
+  GATE_BYPASS = 2,       // Override: Bypassed (Held Open permanently, ignores tokens)
+  GATE_DISABLED = 3      // Override: Disabled (Held Closed permanently, ignores tokens)
+};
+
+// Global state controller variable
+GateStateMode currentGateState = GATE_AUTO_CLOSED;
+
 
 
 BLEScan* pBLEScan;
@@ -358,11 +372,11 @@ class MyAdvertisedDeviceCallbacks : public BLEAdvertisedDeviceCallbacks {
           // --- THE SECURITY ACCESS TRIGGER GOES HERE ---
           Serial.println("\n[SECURITY TRIPPED]: Authorized device has returned after a full absence period!");
           Serial.printf("Device verified out of bounds for %lu minutes. ARRIVAL CHANNELS VALIDATED.\n", (missingTimeMs / 60000));
-         
-      ProxyRequestText = "Authorized device has returned";
-      ProxyPost();
-       ProxyRequestText = "Device verified out of bounds for %lu minutes";
-      ProxyPost();
+
+          ProxyRequestText = "Authorized device has returned";
+          ProxyPost();
+          ProxyRequestText = "Device verified out of bounds for %lu minutes";
+          ProxyPost();
 
 
           // Execute your actual Alexa Gate opener flag execution paths right here!
@@ -370,7 +384,7 @@ class MyAdvertisedDeviceCallbacks : public BLEAdvertisedDeviceCallbacks {
 
         } else if (missingTimeMs > ((unsigned long)presenceWindowSeconds * 1000)) {
           // The device was missing longer than your keep-alive window, but LESS than your 10-minute absence rule
-     //     Serial.println(cleanName);
+          //     Serial.println(cleanName);
           Serial.println("\n[GATE SHIELD ACTIVE]: Token re-appeared but failed sustained absence duration check.");
           Serial.println("Action: Suppressing arrival trigger spike. Marked as static edge flicker.");
         }
@@ -398,10 +412,10 @@ class MyAdvertisedDeviceCallbacks : public BLEAdvertisedDeviceCallbacks {
 
   */
     // --- MASTER SLOT RESERVATION FOR ALL NEW INCOMING DEVICE IDENTITIES ---
-    
+
     if (!found && deviceCount < MAX_DEVICES) {
-     
- unsigned long requiredAbsenceMs = (unsigned long)minAbsenceMinutes * 60 * 1000;
+
+      unsigned long requiredAbsenceMs = (unsigned long)minAbsenceMinutes * 60 * 1000;
       bool isGenuineArrival = false;
       String uniqueID = currentMac;
       uniqueID.toUpperCase();
@@ -435,20 +449,20 @@ class MyAdvertisedDeviceCallbacks : public BLEAdvertisedDeviceCallbacks {
         if (departureHistory[h].identifier == uniqueID) {
           foundInHistory = true;
           unsigned long elapsedAwayTime = now - departureHistory[h].longGoneSince;
-          
+
           Serial.print("[DIAGNOSTIC] Historical Entry Found! Target required: ");
           Serial.print(requiredAbsenceMs / 1000);
           Serial.print("s. Actual elapsed away time: ");
           Serial.print(elapsedAwayTime / 1000);
           Serial.println("s.");
-          
+
           if (elapsedAwayTime > requiredAbsenceMs) {
             isGenuineArrival = true;
             Serial.println("[DIAGNOSTIC] MATCH SUCCESS: Away duration exceeded minimum absence rule window.");
           } else {
             Serial.println("[DIAGNOSTIC] MATCH FAILURE: Device re-entered too quickly. Suppressing arrival trigger.");
           }
-          
+
           // Clean Up historical tracking slot
           for (int k = h; k < historicalCount - 1; k++) {
             departureHistory[k] = departureHistory[k + 1];
@@ -465,13 +479,13 @@ class MyAdvertisedDeviceCallbacks : public BLEAdvertisedDeviceCallbacks {
       // 3. Evaluate safety action states strictly for paired 2FA devices
       if (isAnAuthorized2FAToken) {
         if (isGenuineArrival) {
-          discoveredDevices[deviceCount].firstSeen = now - 1000; // Trigger spike anchor
+          discoveredDevices[deviceCount].firstSeen = now - 1000;  // Trigger spike anchor
           Serial.print("🌟 [SECURITY VALIDATED]: Fresh entry spike authenticated for: ");
           Serial.println(matchedFriendlyName);
-          
+
           // --- EXECUTE THE GATE UNLOCK ACTION PATHS ---
           triggerSecurityGate(matchedFriendlyName, currentMac);
-          
+
           // Find the device slot in your authDevices database and latch it true
           for (int k = 0; k < authDeviceCount; k++) {
             if (authDevices[k].macAddress == currentMac) {
@@ -479,7 +493,7 @@ class MyAdvertisedDeviceCallbacks : public BLEAdvertisedDeviceCallbacks {
               break;
             }
           }
-          
+
         } else {
           discoveredDevices[deviceCount].firstSeen = now;
           Serial.print("⚠️ [SECURITY BYPASS]: ");
@@ -487,7 +501,7 @@ class MyAdvertisedDeviceCallbacks : public BLEAdvertisedDeviceCallbacks {
           Serial.println(" re-detected, but suppressed due to missing absence duration timeline gaps.");
         }
       } else {
-        discoveredDevices[deviceCount].firstSeen = now; // Standard tracking for ambient noise
+        discoveredDevices[deviceCount].firstSeen = now;  // Standard tracking for ambient noise
       }
 
       // Commit fields down to your tracking structures
@@ -495,11 +509,11 @@ class MyAdvertisedDeviceCallbacks : public BLEAdvertisedDeviceCallbacks {
       discoveredDevices[deviceCount].rssi = currentRssi;
       discoveredDevices[deviceCount].lastSeen = now;
       discoveredDevices[deviceCount].deviceType = (isAnAuthorized2FAToken) ? matchedFriendlyName : manufacturer;
-      discoveredDevices[deviceCount].findMyFingerprint = payloadSignature; 
+      discoveredDevices[deviceCount].findMyFingerprint = payloadSignature;
       deviceCount++;
-    } // end of  if (!found && deviceCount < MAX_DEVICES) {
-  } // end of void onResult(BLEAdvertisedDevice advertisedDevice)
-};  // end of class MyAdvertisedDeviceCallbacks
+    }  // end of  if (!found && deviceCount < MAX_DEVICES) {
+  }    // end of void onResult(BLEAdvertisedDevice advertisedDevice)
+};     // end of class MyAdvertisedDeviceCallbacks
 
 
 bool isAuthorisedTokenPresent() {
@@ -521,6 +535,9 @@ bool isAuthorisedTokenPresent() {
 void saveConfigurationToFlash() {
   // Open the "security" flash namespace in Read/Write mode (false)
   prefs.begin("security", false);
+
+  // BACK UP STATE INTERNALLY: Lock the override state mode down permanently
+  prefs.putInt("gstm", (int)currentGateState);
 
   // 1. Commit stand-alone configuration adjustments
   prefs.putInt("rssiGate", rssiThreshold);
@@ -556,6 +573,10 @@ void saveConfigurationToFlash() {
 void loadConfigurationFromFlash() {
   // Open the "security" flash namespace in Read-Only mode (true)
   prefs.begin("security", true);
+
+  // RESTORE OVERRIDE STATE ON BOOT: Default to GATE_AUTO_CLOSED (0) if flash is empty
+  int savedStateMode = prefs.getInt("gstm", 0);
+  currentGateState = (GateStateMode)savedStateMode;
 
   // 1. Load parameters, defaulting to your current values if flash is empty
   rssiThreshold = prefs.getInt("rssiGate", -90);
@@ -1059,7 +1080,36 @@ void setup() {
 
   //server.on("/setRadioParams", handleRadioParams);
 
+  // =========================================================================
+  // ROUTE: OVERRIDE GATE OPERATION STATE (Unified Direct State Driver)
+  // =========================================================================
+  server.on("/changeGateState", []() {
+    if (server.hasArg("set")) {
+      int stateChoiceID = server.arg("set").toInt();
 
+      if (stateChoiceID == 0 || stateChoiceID == 2 || stateChoiceID == 3) {
+        currentGateState = (GateStateMode)stateChoiceID;
+
+        // Explicitly clear runtime variables when resetting to normal auto monitoring
+        if (currentGateState == GATE_AUTO_CLOSED) {
+          securitySystemDisableAuthorised = false;
+          authorisingDeviceNames = "Scanning...";
+        }
+
+        // Commit change instantly down to non-volatile flash memory cells
+        saveConfigurationToFlash();
+
+        // FORCE AN IMMEDIATE EVALUATION PASS
+        // This ensures your logging traces and variables update before the webpage renders
+        EvaluateSecurityGateState();
+
+        Serial.printf("System Override: Global gate state shifted to Mode ID %d\n", stateChoiceID);
+      }
+    }
+
+    server.sendHeader("Location", "/");
+    server.send(303);
+  });
 
   server.begin();  // Always near the end of setup()
   //Serial.println(F("HTTP Web Server Started!"));
@@ -1085,6 +1135,10 @@ void setup() {
 }  // end of void setup
 
 void loop() {
+
+  // 1. RUN THIS FIRST ON EVERY PASS:
+  // Dynamically settles your securitySystemDisableAuthorised flags and handles manual overrides instantly
+  EvaluateSecurityGateState();
 
   if (WiFi.status() != WL_CONNECTED) {
     delay(1);
@@ -1324,8 +1378,8 @@ void loop() {
     unsigned long maxAllowedAgeMs = (unsigned long)presenceWindowSeconds * 1000;
 
     for (int i = deviceCount - 1; i >= 0; i--) {
- unsigned long elementAgeMs = currentMillis - discoveredDevices[i].lastSeen;
-      
+      unsigned long elementAgeMs = currentMillis - discoveredDevices[i].lastSeen;
+
       if (elementAgeMs >= maxAllowedAgeMs) {
         String currentCheckMac = discoveredDevices[i].macAddress;
         currentCheckMac.toUpperCase();
@@ -1351,14 +1405,15 @@ void loop() {
 
           Serial.print("\n[DIAGNOSTIC] Main Array Expiry: Paired Token ");
           Serial.print(verifiedFriendlyName);
-          Serial.print(" (ID: "); Serial.print(historyUniqueID);
+          Serial.print(" (ID: ");
+          Serial.print(historyUniqueID);
           Serial.println(") has expired out of the keep-alive window.");
 
           // Check if this device already has an entry in our historical array
           bool historyExists = false;
           for (int h = 0; h < historicalCount; h++) {
             if (departureHistory[h].identifier == historyUniqueID) {
-              departureHistory[h].longGoneSince = discoveredDevices[i].lastSeen; // Update exit mark
+              departureHistory[h].longGoneSince = discoveredDevices[i].lastSeen;  // Update exit mark
               historyExists = true;
               Serial.println("[DIAGNOSTIC] History Updated: Existing historical timestamp overwritten.");
               break;
@@ -1370,7 +1425,7 @@ void loop() {
             departureHistory[historicalCount].identifier = historyUniqueID;
             departureHistory[historicalCount].longGoneSince = discoveredDevices[i].lastSeen;
             historicalCount++;
-            
+
             Serial.print("[DIAGNOSTIC] History Added: Saved to historical array index slot: ");
             Serial.println(historicalCount - 1);
           }
@@ -1380,9 +1435,9 @@ void loop() {
         for (int j = i; j < deviceCount - 1; j++) {
           discoveredDevices[j] = discoveredDevices[j + 1];
         }
-        deviceCount--; 
+        deviceCount--;
       }
-    } // end of for (int i = deviceCount - 1; i >= 0; i--) {
+    }  // end of for (int i = deviceCount - 1; i >= 0; i--) {
     lastBleCycle = currentMillis;
   }
 
@@ -1393,9 +1448,9 @@ void loop() {
     ArduinoOTA.handle();  // Checks the Wi-Fi card for any incoming update binaries
     lastOtaCheck = millis();
   }
-  
 
-    ArduinoOTA.handle();  // Checks the Wi-Fi card for any incoming update binaries
+
+  ArduinoOTA.handle();  // Checks the Wi-Fi card for any incoming update binaries
 
   delay(1);  // Small safety yield to prevent watchdog resets
 
@@ -1488,6 +1543,8 @@ works, but irrelevant
   unsigned long now = millis();
   String bannerHtml = "";
 
+  /*
+
   // Enforce clock validation to dynamically drop the flag if time has run out
   if (securitySystemDisableAuthorised) {
     unsigned long timeElapsed = (now - gateActivationTime) / 1000;
@@ -1512,6 +1569,73 @@ works, but irrelevant
     bannerHtml += "<small style='color: #666;'>Bring a verified arrival token into proximity to authorize system overrides.</small>";
     bannerHtml += "</div>";
   }
+
+  */
+
+  // Enforce clock validation to dynamically drop the flag if time has run out
+  // FIXED: Added 'currentGateState != GATE_BYPASS' to protect manual overrides!
+  if (securitySystemDisableAuthorised && currentGateState != GATE_BYPASS) {
+    unsigned long timeElapsed = (now - gateActivationTime) / 1000;
+    if (timeElapsed >= (unsigned long)voiceGateOpenDurationSeconds) {
+      // Time expired: Cleanly close the system gate back down
+      securitySystemDisableAuthorised = false;
+      authorisingDeviceNames = "";
+      currentGateState = GATE_AUTO_CLOSED;  // Keep your state machine in sync
+    }
+  }
+
+ // --- DYNAMIC 4-STATE CSS INDICATOR SELECTION ---
+  String bannerColor = "#ffcccc"; // Default Light Red (GATE_AUTO_CLOSED)
+  String bannerTextColor = "#800000";
+  String bannerText = "ALEXA DISARM GATE: CLOSED (AUTO)";
+
+  // If in standard auto-open mode
+  if (currentGateState == GATE_AUTO_OPEN || (currentGateState == GATE_AUTO_CLOSED && securitySystemDisableAuthorised)) {
+    bannerColor = "#ccffcc";     // Light Green
+    bannerTextColor = "#006600";
+    bannerText = "ALEXA DISARM GATE: OPEN (AUTO)";
+  } 
+  // If forced permanently open
+  else if (currentGateState == GATE_BYPASS) {
+    bannerColor = "#006600";     // Dark Green
+    bannerTextColor = "#ffffff"; // White text for strong contrast
+    bannerText = "ALEXA DISARM GATE: BYPASSED (PERMANENTLY OPEN)";
+  } 
+  // If forced permanently closed
+  else if (currentGateState == GATE_DISABLED) {
+    bannerColor = "#990000";     // Dark Red
+    bannerTextColor = "#ffffff";
+    bannerText = "ALEXA DISARM GATE: FORCE DISABLED (PERMANENTLY LOCKED)";
+  }
+
+  // Inject the Visual Indicator Header Banner to the top of your layout
+  html += "<div style='background-color:" + bannerColor + "; color:" + bannerTextColor + "; padding:14px; font-weight:bold; font-size:1.15em; border-radius:6px; margin:15px auto; width:95%; max-width:650px; text-align:center; border:1px solid rgba(0,0,0,0.1);'>";
+  html += bannerText;
+  
+  // --- NEW RESTORATION: SHOW AUTHORISING TOKEN NAME & TIMER ---
+  // Only display the countdown timer details if the gate is dynamically held open by an active target
+  if (securitySystemDisableAuthorised && currentGateState != GATE_BYPASS) {
+    unsigned long nowMs = millis();
+    unsigned long secondsElapsed = (nowMs - gateActivationTime) / 1000;
+    long secondsRemaining = (long)voiceGateOpenDurationSeconds - (long)secondsElapsed;
+    
+    if (secondsRemaining < 0) secondsRemaining = 0;
+
+    html += "<div style='font-size:0.8em; font-weight:normal; margin-top:6px; opacity:0.9;'>";
+    html += "  Validated By: <b>" + authorisingDeviceNames + "</b><br>";
+    html += "  Gate Closes In: <b>" + String(secondsRemaining) + "s</b>";
+    html += "</div>";
+  }
+  
+  html += "</div>";
+
+  // --- RENDERING MANUAL OVERRIDE CONTROL BUTTON PANEL ---
+  html += "<div style='margin: 15px auto; width:95%; max-width:650px; text-align: center; font-size: 0.9em;'>";
+  html += "  <span style='margin-right:8px; font-weight:bold;'>Manual Gate Override:</span>";
+  html += "  <a href='/changeGateState?set=0'><button class='buttonsmall' style='padding:4px 10px; font-size:0.85em;'>Normal Auto</button></a> ";
+  html += "  <a href='/changeGateState?set=2'><button class='buttonsmall' style='padding:4px 10px; font-size:0.85em; background-color:#004d00; color:white; border-color:#003300;'>Bypass</button></a> ";
+  html += "  <a href='/changeGateState?set=3'><button class='buttonsmall' style='padding:4px 10px; font-size:0.85em; background-color:#660000; color:white; border-color:#4d0000;'>Disable</button></a>";
+  html += "</div>";
 
   html += bannerHtml;
 
@@ -1748,7 +1872,7 @@ here to copy freeze hook structure
   html += "  </form>";
   html += "</div>";
 
- // ==========================================
+  // ==========================================
   //  SORT DEVICES BY RSSI (Strongest First)
   // ==========================================
   for (int i = 0; i < deviceCount - 1; i++) {
@@ -2092,13 +2216,17 @@ bool Sec27ASetOff() {
 }
 
 bool Sec27AUnsetOn() {
-  //Serial.println("Request to Unset 27A Security received SW#2 On");
+    Serial.println("\n>>> [RELAY TRACE]: Sec27AUnsetOn Executing!");
+  Serial.print("    State on Entry -> Sec27ASetState: ");// Serial.print(Sec27ASetState);
+  Serial.print(" | securitySystemDisableAuthorised: "); // Serial.println(securitySystemDisableAuthorised);
+
+  Serial.println("Request to Unset 27A Security received SW#2 On");
   ProxyRequestText = "Alexa or Local Web Unset Request";
   RotateProxyLogArray();
 
   if (Sec27ASetState == LOW) {  // only pulse relay if Burglar Alarm is currently Set
     if (securitySystemDisableAuthorised == true) {
-      securitySystemDisableAuthorised = false;
+     // securitySystemDisableAuthorised = false;
 
       //Serial.println("XXX Pulsing Relay on ...");
       // AlarmSetLockout = LOW; // reset the lockout for the turn on function
@@ -2111,7 +2239,7 @@ bool Sec27AUnsetOn() {
       delay(10);
       Serial.write(rel1ON, sizeof(rel1ON));
       delay(10);
-      //Serial.println("Turning Relay#1 On ...");
+      Serial.println("Turning Relay#1 On ...");
       ProxyRequestText = "Authorised Keys found " + authorisingDeviceNames;
       RotateProxyLogArray();
       ProxyRequestText = "UnSet Request Honored ";
@@ -2142,12 +2270,14 @@ bool Sec27AUnsetOn() {
       delay(10);
       //Serial.println("Turning Relay#1 Off ...");
     } else {  // if (securitySystemDisableAuthorised == true)
-      //Serial.println("27A Security UnSet Request NOT Honored - No Auth keys found");
+    Serial.println("    [DENIED]: Request blocked because securitySystemDisableAuthorised is FALSE.");
+      Serial.println("27A Security UnSet Request NOT Honored - No Auth keys found");
       ProxyRequestText = "UnSet Request NOT Honored - No Auth keys found";
       RotateProxyLogArray();
     }
   } else {  //
-    //Serial.println("27A Security UnSet Request NOT Honored - Already Set");
+    Serial.println("27A Security UnSet Request NOT Honored - Already Set");
+    Serial.println("    [DENIED]: Request blocked because Burglar Alarm is already Set.");
     ProxyRequestText = "UnSet Request NOT Honored - Already Set";
     RotateProxyLogArray();
   }
@@ -2566,7 +2696,25 @@ void networkPingTaskEngine(void* parameter) {
           // Un-latch the device ONLY if it has been gone / unreachable
           authIPs[i].hasTrippedGate = false;
         }
+      }  // <-- This is the end of your existing "for (int i = 0; i < authIPCount; i++)" loop
+
+      // --- NEW: DYNAMICALLY UPDATE THE MIDDLEMAN FLAG FOR THE GATE ENGINE ---
+      bool anyPhoneHome = false;
+      unsigned long currentNow = millis();
+
+      for (int i = 0; i < authIPCount; i++) {
+        if (authIPs[i].isOnline) {
+          unsigned long ageMs = currentNow - authIPs[i].lastSeen;
+          unsigned long maxAllowedAgeMs = (unsigned long)presenceWindowSeconds * 1000;
+
+          // If the phone is online and still inside your keep-alive window slider
+          if (ageMs < maxAllowedAgeMs) {
+            anyPhoneHome = true;
+            break;
+          }
+        }
       }
+      wifiSmartphonePresent = anyPhoneHome;  // Commit the result to our global gate thread tracker
 
       // 3. Hand control back over to the Bluetooth scanner engine
       if (pBLEScan != nullptr) pBLEScan->start(3, false);
@@ -2577,7 +2725,7 @@ void networkPingTaskEngine(void* parameter) {
     if (delaySeconds < 1) delaySeconds = 1;
     vTaskDelay(pdMS_TO_TICKS(delaySeconds * 1000));
   }
-}
+} // end networkPingTaskEngine(void* parameter) {
 
 void triggerSecurityGate(String newlyArrivedName, String deviceMac) {
   unsigned long now = millis();
@@ -2701,4 +2849,209 @@ void handleRadioParams() {
   // Redirect back to dashboard root instantly
   server.sendHeader("Location", "/");
   server.send(303, "text/plain", "Redirecting...");
+}
+
+// --- UNIFIED NATIVE SECURITY RULE ENGINE ---
+/*
+void EvaluateSecurityGateState() {
+  unsigned long currentMillis = millis();
+
+  // ========================================================
+  // LAYER 1: PRIORITY OVERRIDES (Only run if manually clicked)
+  // ========================================================
+  if (currentGateState == GATE_DISABLED) {
+    securitySystemDisableAuthorised = false; 
+    authorisingDeviceNames = "SYSTEM FORCE DISABLED";
+    return;
+  }
+
+  if (currentGateState == GATE_BYPASS) {
+    securitySystemDisableAuthorised = true;  
+    authorisingDeviceNames = "SYSTEM FORCE BYPASSED";
+    return;
+  }
+
+  // ========================================================
+  // LAYER 2: YOUR ORIGINAL, PERFECT AUTO FLOW
+  // ========================================================
+  // This is exactly what was running flawlessly on your bench before!
+  bool localTargetDetected = false;
+  String detectedTargetName = "";
+
+  // Check your active Bluetooth array trackers exactly as before
+  for (int i = 0; i < deviceCount; i++) {
+    unsigned long ageMs = currentMillis - discoveredDevices[i].lastSeen;
+    unsigned long maxAgeMs = (unsigned long)presenceWindowSeconds * 1000;
+
+    if (ageMs < maxAgeMs) {
+      String currentCheckMac = discoveredDevices[i].macAddress;
+      currentCheckMac.toUpperCase();
+
+      for (int k = 0; k < authDeviceCount; k++) {
+        String authMac = authDevices[k].macAddress;
+        authMac.toUpperCase();
+        if (authMac == currentCheckMac) {
+          localTargetDetected = true;
+          detectedTargetName = authDevices[k].friendlyName;
+          break;
+        }
+      }
+    }
+    if (localTargetDetected) break; 
+  }
+
+  // Check the Wi-Fi smartphone flag if Bluetooth didn't see anything
+  if (!localTargetDetected && wifiSmartphonePresent) {
+    localTargetDetected = true;
+    detectedTargetName = "Authorized Smartphone (Wi-Fi)";
+  }
+
+  // ========================================================
+  // LAYER 3: CORE LATCH OPERATIONS
+  // ========================================================
+  if (localTargetDetected) {
+    securitySystemDisableAuthorised = true; 
+    authorisingDeviceNames = detectedTargetName;
+    currentGateState = GATE_AUTO_OPEN;
+  } else {
+    // If no devices are home, check if an active arrival countdown window is running
+    unsigned long timeElapsedSec = (currentMillis - gateActivationTime) / 1000;
+    
+    if (timeElapsedSec < (unsigned long)voiceGateOpenDurationSeconds) {
+      // Keep open temporarily while the countdown timer runs out
+      securitySystemDisableAuthorised = true; 
+      currentGateState = GATE_AUTO_OPEN;
+    } else {
+      // Countdown window finished and no devices home: Lock down hard
+      securitySystemDisableAuthorised = false; 
+      authorisingDeviceNames = "Scanning...";
+      currentGateState = GATE_AUTO_CLOSED;
+    }
+  }
+
+  // =========================================================================
+  // 🔍 PRODUCTION GATE DIAGNOSTIC PRINTER 
+  // =========================================================================
+  static unsigned long lastDiagnosticPrint = 0;
+  if (currentMillis - lastDiagnosticPrint > 3000) { 
+    lastDiagnosticPrint = currentMillis;
+    
+    Serial.println("\n--- [GATE LOG] MAIN PATH METRICS ---");
+    Serial.print("  Global currentGateState ID : "); Serial.println((int)currentGateState);
+    Serial.print("  securitySystemDisableAuth  : "); Serial.println(securitySystemDisableAuthorised ? "TRUE (OPEN)" : "FALSE (CLOSED)");
+    Serial.print("  Local Target Detected?     : "); Serial.println(localTargetDetected ? "YES" : "NO");
+    Serial.print("  WiFi Smartphone Present?   : "); Serial.println(wifiSmartphonePresent ? "YES" : "NO");
+    Serial.print("  Active Token Name String   : "); Serial.println(authorisingDeviceNames);
+    
+    unsigned long elapsed = (currentMillis - gateActivationTime) / 1000;
+    long remaining = (long)voiceGateOpenDurationSeconds - (long)elapsed;
+    Serial.printf("  Timer Tracker Details     : Elapsed %lus | Remaining %lds | Limit %ds\n", 
+                  elapsed, remaining, voiceGateOpenDurationSeconds);
+    Serial.println("------------------------------------");
+  }
+}
+*/
+void EvaluateSecurityGateState() {
+  unsigned long currentMillis = millis();
+
+  // ==========================================
+  // RULE 1: CRITICAL FORCE DISABLE OVERRIDE
+  // ==========================================
+  if (currentGateState == GATE_DISABLED) {
+    securitySystemDisableAuthorised = false; 
+    authorisingDeviceNames = "SYSTEM FORCE DISABLED";
+    return;
+  }
+
+  // ==========================================
+  // RULE 2: CRITICAL FORCE BYPASS OVERRIDE
+  // ==========================================
+  if (currentGateState == GATE_BYPASS) {
+    securitySystemDisableAuthorised = true;  
+    authorisingDeviceNames = "SYSTEM FORCE BYPASSED";
+    return;
+  }
+
+  // ==========================================
+  // RULE 3: STANDARD AUTOMATIC TRACKING FLOW
+  // ==========================================
+  bool localTargetDetected = false;
+  String detectedTargetName = "";
+
+  // FIXED: Instead of searching raw memory age (which overrides your absence rule),
+  // a Bluetooth tracker can ONLY keep the gate open if the gate has ALREADY been 
+  // legitimately tripped open by your callback class's re-entry validation spike!
+  if (securitySystemDisableAuthorised) {
+    for (int i = 0; i < deviceCount; i++) {
+      unsigned long ageMs = currentMillis - discoveredDevices[i].lastSeen;
+      unsigned long maxAgeMs = (unsigned long)presenceWindowSeconds * 1000;
+
+      if (ageMs < maxAgeMs) {
+        String currentCheckMac = discoveredDevices[i].macAddress;
+        currentCheckMac.toUpperCase();
+
+        for (int k = 0; k < authDeviceCount; k++) {
+          String authMac = authDevices[k].macAddress;
+          authMac.toUpperCase();
+          if (authMac == currentCheckMac) {
+            localTargetDetected = true;
+            detectedTargetName = authDevices[k].friendlyName;
+            break;
+          }
+        }
+      }
+      if (localTargetDetected) break; 
+    }
+  }
+
+  // --- LAYER B: CHECK THE DYNAMIC WI-FI SMARTPHONE THREAD FLAG ---
+  if (!localTargetDetected && wifiSmartphonePresent) {
+    localTargetDetected = true;
+    detectedTargetName = "Authorized Smartphone (Wi-Fi)";
+  }
+
+  // ==========================================
+  // RULE 4: SET THE SECURE LATCH LOGIC BOUNDS
+  // ==========================================
+  if (localTargetDetected) {
+    // An active, already-validated tracker or phone is home: Keep the gate open
+    securitySystemDisableAuthorised = true; 
+    authorisingDeviceNames = detectedTargetName;
+    currentGateState = GATE_AUTO_OPEN;
+  } else {
+    // NO DEIVCES HOME: Check if a running voice command window is ticking down
+    unsigned long timeElapsedSec = (currentMillis - gateActivationTime) / 1000;
+    
+    // The countdown window can ONLY hold the gate open if it was previously 
+    // triggered open by an arrival event, AND the timer hasn't run out yet.
+    if (securitySystemDisableAuthorised && (timeElapsedSec < (unsigned long)voiceGateOpenDurationSeconds)) {
+      currentGateState = GATE_AUTO_OPEN; 
+    } else {
+      // Time is up, or no active arrival event is running: FORCE CLOSED SECURELY
+      securitySystemDisableAuthorised = false; 
+      authorisingDeviceNames = "Scanning...";
+      currentGateState = GATE_AUTO_CLOSED;
+    }
+  }
+
+  // =========================================================================
+  // 🔍 PRODUCTION GATE DIAGNOSTIC PRINTER 
+  // =========================================================================
+  static unsigned long lastDiagnosticPrint = 0;
+  if (currentMillis - lastDiagnosticPrint > 3000) { 
+    lastDiagnosticPrint = currentMillis;
+    
+    Serial.println("\n--- [GATE LOG] MAIN PATH METRICS ---");
+    Serial.print("  Global currentGateState ID : "); Serial.println((int)currentGateState);
+    Serial.print("  securitySystemDisableAuth  : "); Serial.println(securitySystemDisableAuthorised ? "TRUE (OPEN)" : "FALSE (CLOSED)");
+    Serial.print("  Local Target Detected?     : "); Serial.println(localTargetDetected ? "YES" : "NO");
+    Serial.print("  WiFi Smartphone Present?   : "); Serial.println(wifiSmartphonePresent ? "YES" : "NO");
+    Serial.print("  Active Token Name String   : "); Serial.println(authorisingDeviceNames);
+    
+    unsigned long elapsed = (currentMillis - gateActivationTime) / 1000;
+    long remaining = (long)voiceGateOpenDurationSeconds - (long)elapsed;
+    Serial.printf("  Timer Tracker Details     : Elapsed %lus | Remaining %lds | Limit %ds\n", 
+                  elapsed, remaining, voiceGateOpenDurationSeconds);
+    Serial.println("------------------------------------");
+  }
 }
