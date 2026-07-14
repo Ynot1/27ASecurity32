@@ -35,7 +35,8 @@ Preferences prefs;  // Instantiate the permanent storage core instance
 #include <BLEScan.h>
 #include <BLEAdvertisedDevice.h>
 
-bool wifiSmartphonePresent = false;  // True when any paired 2FA phone is alive on Wi-Fi
+//bool wifiSmartphonePresent = false;  // True when any paired 2FA phone is alive on Wi-Fi
+String wifiSmartphoneFriendlyName = ""; // Empty string when no cellphones are home
 
 // Handle non-blocking timing loop for the OTA background processor
 unsigned long lastOtaCheck = 0;
@@ -2698,23 +2699,24 @@ void networkPingTaskEngine(void* parameter) {
         }
       }  // <-- This is the end of your existing "for (int i = 0; i < authIPCount; i++)" loop
 
-      // --- NEW: DYNAMICALLY UPDATE THE MIDDLEMAN FLAG FOR THE GATE ENGINE ---
-      bool anyPhoneHome = false;
+// --- NEW FIXED: EXTRACT REAL FRIENDLY NAMES DYNAMICALLY FOR THE WEB SYSTEM ---
+      String phoneHomeName = "";
       unsigned long currentNow = millis();
-
+      
       for (int i = 0; i < authIPCount; i++) {
         if (authIPs[i].isOnline) {
           unsigned long ageMs = currentNow - authIPs[i].lastSeen;
           unsigned long maxAllowedAgeMs = (unsigned long)presenceWindowSeconds * 1000;
-
-          // If the phone is online and still inside your keep-alive window slider
+          
+          // Is the cellphone online and inside your live keep-alive slider window?
           if (ageMs < maxAllowedAgeMs) {
-            anyPhoneHome = true;
-            break;
+            phoneHomeName = authIPs[i].friendlyName; // Capture the real profile name!
+            if (phoneHomeName == "") phoneHomeName = "Authorized Smartphone (Wi-Fi)";
+            break; // Grab the first active phone match and exit
           }
         }
       }
-      wifiSmartphonePresent = anyPhoneHome;  // Commit the result to our global gate thread tracker
+      wifiSmartphoneFriendlyName = phoneHomeName; // Lock the text string straight to our global bridge variable
 
       // 3. Hand control back over to the Bluetooth scanner engine
       if (pBLEScan != nullptr) pBLEScan->start(3, false);
@@ -2951,6 +2953,10 @@ void EvaluateSecurityGateState() {
   }
 }
 */
+/* 
+
+works but token names dont concatemate
+
 void EvaluateSecurityGateState() {
   unsigned long currentMillis = millis();
 
@@ -3004,30 +3010,26 @@ void EvaluateSecurityGateState() {
     }
   }
 
-  // --- LAYER B: CHECK THE DYNAMIC WI-FI SMARTPHONE THREAD FLAG ---
-  if (!localTargetDetected && wifiSmartphonePresent) {
+ // --- LAYER B: CHECK THE DYNAMIC WI-FI SMARTPHONE THREAD FLAG ---
+  // FIXED: Directly extracts the shared text name from your background FreeRTOS thread
+  if (!localTargetDetected && wifiSmartphoneFriendlyName != "") {
     localTargetDetected = true;
-    detectedTargetName = "Authorized Smartphone (Wi-Fi)";
+    detectedTargetName = wifiSmartphoneFriendlyName; // Pulls your exact matched identity!
   }
 
   // ==========================================
   // RULE 4: SET THE SECURE LATCH LOGIC BOUNDS
   // ==========================================
   if (localTargetDetected) {
-    // An active, already-validated tracker or phone is home: Keep the gate open
     securitySystemDisableAuthorised = true; 
     authorisingDeviceNames = detectedTargetName;
     currentGateState = GATE_AUTO_OPEN;
   } else {
-    // NO DEIVCES HOME: Check if a running voice command window is ticking down
     unsigned long timeElapsedSec = (currentMillis - gateActivationTime) / 1000;
     
-    // The countdown window can ONLY hold the gate open if it was previously 
-    // triggered open by an arrival event, AND the timer hasn't run out yet.
     if (securitySystemDisableAuthorised && (timeElapsedSec < (unsigned long)voiceGateOpenDurationSeconds)) {
       currentGateState = GATE_AUTO_OPEN; 
     } else {
-      // Time is up, or no active arrival event is running: FORCE CLOSED SECURELY
       securitySystemDisableAuthorised = false; 
       authorisingDeviceNames = "Scanning...";
       currentGateState = GATE_AUTO_CLOSED;
@@ -3045,7 +3047,7 @@ void EvaluateSecurityGateState() {
     Serial.print("  Global currentGateState ID : "); Serial.println((int)currentGateState);
     Serial.print("  securitySystemDisableAuth  : "); Serial.println(securitySystemDisableAuthorised ? "TRUE (OPEN)" : "FALSE (CLOSED)");
     Serial.print("  Local Target Detected?     : "); Serial.println(localTargetDetected ? "YES" : "NO");
-    Serial.print("  WiFi Smartphone Present?   : "); Serial.println(wifiSmartphonePresent ? "YES" : "NO");
+    Serial.print("  WiFi Smartphone Present?   : "); Serial.println(wifiSmartphoneFriendlyName != "" ? wifiSmartphoneFriendlyName : "NO");
     Serial.print("  Active Token Name String   : "); Serial.println(authorisingDeviceNames);
     
     unsigned long elapsed = (currentMillis - gateActivationTime) / 1000;
@@ -3054,4 +3056,120 @@ void EvaluateSecurityGateState() {
                   elapsed, remaining, voiceGateOpenDurationSeconds);
     Serial.println("------------------------------------");
   }
+}
+*/
+
+void EvaluateSecurityGateState() {
+  unsigned long currentMillis = millis();
+
+  // ==========================================
+  // RULE 1: CRITICAL FORCE DISABLE OVERRIDE
+  // ==========================================
+  if (currentGateState == GATE_DISABLED) {
+    securitySystemDisableAuthorised = false; 
+    authorisingDeviceNames = "SYSTEM FORCE DISABLED";
+    return;
+  }
+
+  // ==========================================
+  // RULE 2: CRITICAL FORCE BYPASS OVERRIDE
+  // ==========================================
+  if (currentGateState == GATE_BYPASS) {
+    securitySystemDisableAuthorised = true;  
+    authorisingDeviceNames = "SYSTEM FORCE BYPASSED";
+    return;
+  }
+
+  // ==========================================
+  // RULE 3: STANDARD AUTOMATIC TRACKING FLOW
+  // ==========================================
+  bool localTargetDetected = false;
+  String detectedTargetName = "";
+
+  // --- LAYER A: SWEEP ALL ACTIVE BLUETOOTH ARRAY TRACKERS ---
+  if (securitySystemDisableAuthorised) {
+    for (int i = 0; i < deviceCount; i++) {
+      unsigned long ageMs = currentMillis - discoveredDevices[i].lastSeen;
+      unsigned long maxAgeMs = (unsigned long)presenceWindowSeconds * 1000;
+
+      if (ageMs < maxAgeMs) {
+        String currentCheckMac = discoveredDevices[i].macAddress;
+        currentCheckMac.toUpperCase();
+
+        for (int k = 0; k < authDeviceCount; k++) {
+          String authMac = authDevices[k].macAddress;
+          authMac.toUpperCase();
+          if (authMac == currentCheckMac) {
+            localTargetDetected = true;
+            
+            // CONCATENATION ENGINE: Append name cleanly if another token is already listed
+            if (detectedTargetName != "") {
+              // Ensure we don't repeat the exact same token name if it chirps twice
+              if (detectedTargetName.indexOf(authDevices[k].friendlyName) == -1) {
+                detectedTargetName += " & " + authDevices[k].friendlyName;
+              }
+            } else {
+              detectedTargetName = authDevices[k].friendlyName;
+            }
+            // Removed early 'break' so the loop sweeps all 30 slots for other family keys!
+          }
+        }
+      }
+    }
+  }
+
+  // --- LAYER B: CONCATENATE THE DYNAMIC WI-FI SMARTPHONE THREAD STRING ---
+  if (wifiSmartphoneFriendlyName != "") {
+    localTargetDetected = true;
+    if (detectedTargetName != "") {
+      if (detectedTargetName.indexOf(wifiSmartphoneFriendlyName) == -1) {
+        detectedTargetName += " & " + wifiSmartphoneFriendlyName;
+      }
+    } else {
+      detectedTargetName = wifiSmartphoneFriendlyName;
+    }
+  }
+
+  // ==========================================
+  // RULE 4: SET THE SECURE LATCH LOGIC BOUNDS
+  // ==========================================
+  if (localTargetDetected) {
+    securitySystemDisableAuthorised = true; 
+    authorisingDeviceNames = detectedTargetName;
+    currentGateState = GATE_AUTO_OPEN;
+  } else {
+    unsigned long timeElapsedSec = (currentMillis - gateActivationTime) / 1000;
+    
+    if (securitySystemDisableAuthorised && (timeElapsedSec < (unsigned long)voiceGateOpenDurationSeconds)) {
+      currentGateState = GATE_AUTO_OPEN; 
+    } else {
+      securitySystemDisableAuthorised = false; 
+      authorisingDeviceNames = "Scanning...";
+      currentGateState = GATE_AUTO_CLOSED;
+    }
+  }
+/*
+  // =========================================================================
+  // 🔍 PRODUCTION GATE DIAGNOSTIC PRINTER 
+  // =========================================================================
+  static unsigned long lastDiagnosticPrint = 0;
+  if (currentMillis - lastDiagnosticPrint > 3000) { 
+    lastDiagnosticPrint = currentMillis;
+    
+    Serial.println("\n--- [GATE LOG] MAIN PATH METRICS ---");
+    Serial.print("  Global currentGateState ID : "); Serial.println((int)currentGateState);
+    Serial.print("  securitySystemDisableAuth  : "); Serial.println(securitySystemDisableAuthorised ? "TRUE (OPEN)" : "FALSE (CLOSED)");
+    Serial.print("  Local Target Detected?     : "); Serial.println(localTargetDetected ? "YES" : "NO");
+    Serial.print("  WiFi Smartphone Present?   : "); Serial.println(wifiSmartphoneFriendlyName != "" ? wifiSmartphoneFriendlyName : "NO");
+    Serial.print("  Active Token Name String   : "); Serial.println(authorisingDeviceNames);
+    
+    unsigned long elapsed = (currentMillis - gateActivationTime) / 1000;
+    long remaining = (long)voiceGateOpenDurationSeconds - (long)elapsed;
+    Serial.printf("  Timer Tracker Details     : Elapsed %lus | Remaining %lds | Limit %ds\n", 
+                  elapsed, remaining, voiceGateOpenDurationSeconds);
+    Serial.println("------------------------------------");
+  }
+
+*/
+
 }
