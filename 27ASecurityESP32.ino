@@ -485,7 +485,18 @@ class MyAdvertisedDeviceCallbacks : public BLEAdvertisedDeviceCallbacks {
           Serial.println(matchedFriendlyName);
 
           // --- EXECUTE THE GATE UNLOCK ACTION PATHS ---
-          triggerSecurityGate(matchedFriendlyName, currentMac);
+          //triggerSecurityGate(matchedFriendlyName, currentMac);
+                    // ⚡ REPLACE IT WITH DIRECT RUNTIME LIFTS:
+          securitySystemDisableAuthorised = true; // Flips the gate open natively!
+          gateActivationTime = millis();          // Start your fresh arrival duration clock
+          authorisingDeviceNames = matchedFriendlyName;
+          
+          for (int k = 0; k < authDeviceCount; k++) {
+            if (authDevices[k].macAddress == currentMac) {
+              authDevices[k].hasTrippedGate = true;
+              break;
+            }
+          }
 
           // Find the device slot in your authDevices database and latch it true
           for (int k = 0; k < authDeviceCount; k++) {
@@ -2217,17 +2228,28 @@ bool Sec27ASetOff() {
 }
 
 bool Sec27AUnsetOn() {
-    Serial.println("\n>>> [RELAY TRACE]: Sec27AUnsetOn Executing!");
-  Serial.print("    State on Entry -> Sec27ASetState: ");// Serial.print(Sec27ASetState);
-  Serial.print(" | securitySystemDisableAuthorised: "); // Serial.println(securitySystemDisableAuthorised);
+
+   Serial.println("\n>>> [RELAY TRANSACTION EXECUTE]: Sec27AUnsetOn Fired!");
+  Serial.print("    Variable Check -> securitySystemDisableAuthorised: "); 
+  Serial.println(securitySystemDisableAuthorised ? "1 (TRUE/OPEN)" : "0 (FALSE/CLOSED)");
+  Serial.print("    Variable Check -> currentGateState ID: "); 
+  Serial.println((int)currentGateState);
+  Serial.print("    Active Token List Captured On Firing: "); 
+  Serial.println(authorisingDeviceNames);
+
 
   Serial.println("Request to Unset 27A Security received SW#2 On");
   ProxyRequestText = "Alexa or Local Web Unset Request";
   RotateProxyLogArray();
 
   if (Sec27ASetState == LOW) {  // only pulse relay if Burglar Alarm is currently Set
-    if (securitySystemDisableAuthorised == true) {
-     // securitySystemDisableAuthorised = false;
+   if (securitySystemDisableAuthorised == true) { // this worked for bluetooth, but was unstable for phones
+  
+      
+      // Since it's valid, lock the flag false if you want it to be a one-shot on success
+      securitySystemDisableAuthorised = false; 
+      Serial.println("    [TRANSACTION MATCHED]: Variable is TRUE! Firing serial relays now...");
+     securitySystemDisableAuthorised = false; // Does this force the gate to close again after a sucessfull disarm?
 
       //Serial.println("XXX Pulsing Relay on ...");
       // AlarmSetLockout = LOW; // reset the lockout for the turn on function
@@ -2653,7 +2675,7 @@ void handleUnSet() {
   server.sendHeader("Location", "/");
   server.send(303, "text/plain", "Redirecting...");
 }
-
+/* works, but doesnt have a min absense window
 // --- FreeRTOS Independent Task Engine For Network Pings ---
 void networkPingTaskEngine(void* parameter) {
   // Give the ESP32 5 seconds to complete Wi-Fi and startup tasks before beginning
@@ -2728,47 +2750,140 @@ void networkPingTaskEngine(void* parameter) {
     vTaskDelay(pdMS_TO_TICKS(delaySeconds * 1000));
   }
 } // end networkPingTaskEngine(void* parameter) {
+*/
 
-void triggerSecurityGate(String newlyArrivedName, String deviceMac) {
-  unsigned long now = millis();
-  String cleanName = newlyArrivedName;
+// =========================================================================
+// ⚡ UPDATED: FreeRTOS Ping Engine - Fully Decoupled From External Functions
+// =========================================================================
+void networkPingTaskEngine(void* parameter) {
+  vTaskDelay(pdMS_TO_TICKS(5000));
 
-  // 1. BULLETPROOF LOOKUP: If the name is blank, unassigned, or a generic placeholder, find it!
-  if (cleanName == "" || cleanName == "Authorized Bluetooth Key" || cleanName == "null") {
-    if (deviceMac != "") {
-      deviceMac.toUpperCase();
-      // Search the Bluetooth database for the true friendly name
-      for (int k = 0; k < authDeviceCount; k++) {
-        if (authDevices[k].macAddress == deviceMac) {
-          if (authDevices[k].friendlyName != "") {
-            cleanName = authDevices[k].friendlyName;
+  while (true) {
+    if (WiFi.status() == WL_CONNECTED && authIPCount > 0) {
+      IPAddress localIP = WiFi.localIP();
+      uint8_t myOwnLastQuad = localIP[3];  // Identify self IP quad
+
+      if (pBLEScan != nullptr) pBLEScan->stop();
+      vTaskDelay(pdMS_TO_TICKS(30));  
+
+      for (int i = 0; i < authIPCount; i++) {
+        if (authIPs[i].lastQuad == 0) continue;
+
+        if (authIPs[i].lastQuad == myOwnLastQuad) {
+          authIPs[i].lastSeen = millis();
+          authIPs[i].isOnline = true;
+          continue;
+        }
+
+        IPAddress targetIP(localIP[0], localIP[1], localIP[2], authIPs[i].lastQuad);
+        unsigned long nowMs = millis();
+        unsigned long requiredAbsenceMs = (unsigned long)minAbsenceMinutes * 60 * 1000;
+        bool passesAbsenceFence = false;
+
+        String uniquePhoneID = "IP_QUAD_" + String(authIPs[i].lastQuad);
+
+        if (Ping.ping(targetIP, 2)) {
+          if (!authIPs[i].isOnline) {
+            bool foundInHistory = false;
+
+            for (int h = 0; h < historicalCount; h++) {
+              if (departureHistory[h].identifier == uniquePhoneID) {
+                foundInHistory = true;
+                unsigned long elapsedAwayTime = nowMs - departureHistory[h].longGoneSince;
+
+                Serial.printf("[PING DIAGNOSTIC] Phone Return Detected. Required: %lu s | Actual Away: %lu s\n", 
+                              requiredAbsenceMs / 1000, elapsedAwayTime / 1000);
+
+                if (elapsedAwayTime > requiredAbsenceMs) {
+                  passesAbsenceFence = true;
+                }
+                
+                for (int k = h; k < historicalCount - 1; k++) {
+                  departureHistory[k] = departureHistory[k + 1];
+                }
+                historicalCount--;
+                break;
+              }
+            }
+
+            if (!foundInHistory) {
+              passesAbsenceFence = false; 
+            }
+          }
+
+          // FIXED: Completely removed triggerSecurityGate. 
+          // The background task now strictly updates its internal state records.
+          if (!authIPs[i].isOnline && !authIPs[i].hasTrippedGate) {
+            if (passesAbsenceFence) {
+              Serial.print("🌟 [WIFI VALIDATED]: Phone cleared the absence fence: ");
+              Serial.println(authIPs[i].friendlyName);
+              
+              // Instead of calling an external function, we set your standard arrival triggers natively
+              authIPs[i].hasTrippedGate = true; 
+              authIPs[i].firstSeen = nowMs;
+              gateActivationTime = nowMs; // Kick off your "Fresh Arrival" duration countdown
+            } else {
+              Serial.print("⚠️ [WIFI SUPPRESSED]: Background sleep re-connection caught for: ");
+              Serial.println(authIPs[i].friendlyName);
+              authIPs[i].hasTrippedGate = true; 
+              authIPs[i].firstSeen = nowMs;
+            }
+          }
+
+          authIPs[i].lastSeen = nowMs;
+          authIPs[i].isOnline = true;
+
+        } else {
+          if (authIPs[i].isOnline) {
+            bool historyExists = false;
+            for (int h = 0; h < historicalCount; h++) {
+              if (departureHistory[h].identifier == uniquePhoneID) {
+                departureHistory[h].longGoneSince = millis();
+                historyExists = true;
+                break;
+              }
+            }
+
+            if (!historyExists && historicalCount < MAX_HISTORICAL) {
+              departureHistory[historicalCount].identifier = uniquePhoneID;
+              departureHistory[historicalCount].longGoneSince = millis();
+              historicalCount++;
+              Serial.printf("[WIFI WORKER]: %s moved to long-term departure history monitoring.\n", authIPs[i].friendlyName);
+            }
+          }
+
+          authIPs[i].isOnline = false;
+          authIPs[i].hasTrippedGate = false; 
+        }
+      } 
+
+      // --- UPDATING THE MIDDLEMAN TEXT STRING FOR THE GATE ENGINE ---
+      String phoneHomeName = "";
+      unsigned long currentNow = millis();
+      
+      for (int i = 0; i < authIPCount; i++) {
+        if (authIPs[i].isOnline) {
+          unsigned long ageMs = currentNow - authIPs[i].lastSeen;
+          unsigned long maxAllowedAgeMs = (unsigned long)presenceWindowSeconds * 1000;
+          
+          if (ageMs < maxAllowedAgeMs && authIPs[i].hasTrippedGate) {
+            if (currentGateState != GATE_DISABLED) {
+              phoneHomeName = authIPs[i].friendlyName; 
+              if (phoneHomeName == "") phoneHomeName = "Authorized Smartphone (Wi-Fi)";
+              break; 
+            }
           }
         }
       }
+      wifiSmartphoneFriendlyName = phoneHomeName; 
+
+      if (pBLEScan != nullptr) pBLEScan->start(3, false);
     }
-  }
 
-  // 2. SECONDARY FALLBACK: If it's still generic, use a clean text description
-  if (cleanName == "" || cleanName == "null") {
-    cleanName = "Unknown Proximity Token";
+    int delaySeconds = networkPingIntervalSeconds;
+    if (delaySeconds < 1) delaySeconds = 1;
+    vTaskDelay(pdMS_TO_TICKS(delaySeconds * 1000));
   }
-
-  // 3. CONCATENATION LOGIC: Build the dynamic event string safely
-  unsigned long timeWindowMs = (unsigned long)voiceGateOpenDurationSeconds * 1000;
-  if (securitySystemDisableAuthorised && (now - gateActivationTime < timeWindowMs)) {
-    // Only append if the name isn't already included in the list
-    if (authorisingDeviceNames.indexOf(cleanName) == -1) {
-      authorisingDeviceNames += " + " + cleanName;
-    }
-  } else {
-    // Fresh standalone trigger cycle window opening
-    securitySystemDisableAuthorised = true;
-    authorisingDeviceNames = cleanName;
-  }
-
-  gateActivationTime = now;  // Update the clock
-  //Serial.print("🔒 VOICE SECURITY GATE ACTIVE: ");
-  //Serial.println(authorisingDeviceNames);
 }
 
 void SetupWirelessOTA() {
@@ -3059,6 +3174,8 @@ void EvaluateSecurityGateState() {
 }
 */
 
+/* 
+this incorrectly sets the securitysystemdiable flag 
 void EvaluateSecurityGateState() {
   unsigned long currentMillis = millis();
 
@@ -3170,6 +3287,128 @@ void EvaluateSecurityGateState() {
     Serial.println("------------------------------------");
   }
 
+
+
+// =========================================================================
+  // 🔍 TRACING ENGINE FLAGS (Add at the very end of EvaluateSecurityGateState)
+  // =========================================================================
+  static unsigned long gateStateTraceTimer = 0;
+  if (millis() - gateStateTraceTimer > 2000) { // Print every 2 seconds
+    gateStateTraceTimer = millis();
+    
+    Serial.println("\n--- [4-STATE TRACE]: CORE VARIABLES STATUS ---");
+    Serial.print("  Global currentGateState Enum ID : "); Serial.println((int)currentGateState);
+    Serial.print("  securitySystemDisableAuthorised : "); Serial.println(securitySystemDisableAuthorised ? "TRUE (OPEN)" : "FALSE (CLOSED)");
+    Serial.print("  Banner Name Text Displayed       : "); Serial.println(authorisingDeviceNames);
+    Serial.print("  wifiSmartphoneFriendlyName File  : "); Serial.println(wifiSmartphoneFriendlyName == "" ? "EMPTY" : wifiSmartphoneFriendlyName);
+    
+    // Check the active time parameters
+    unsigned long elapsed = (millis() - gateActivationTime) / 1000;
+    long remaining = (long)voiceGateOpenDurationSeconds - (long)elapsed;
+    Serial.printf("  Countdown Check                  : Elapsed %lus | Remaining %lds | Limit %ds\n", 
+                  elapsed, remaining, voiceGateOpenDurationSeconds);
+    Serial.println("----------------------------------------------");
+  }
+
+}
+
 */
 
+void EvaluateSecurityGateState() {
+  unsigned long currentMillis = millis();
+
+  // ==========================================
+  // RULE 1: CRITICAL FORCE DISABLE OVERRIDE
+  // ==========================================
+  if (currentGateState == GATE_DISABLED) {
+    securitySystemDisableAuthorised = false; 
+    authorisingDeviceNames = "SYSTEM FORCE DISABLED";
+    return;
+  }
+
+  // ==========================================
+  // RULE 2: CRITICAL FORCE BYPASS OVERRIDE
+  // ==========================================
+  if (currentGateState == GATE_BYPASS) {
+    securitySystemDisableAuthorised = true;  
+    authorisingDeviceNames = "SYSTEM FORCE BYPASSED";
+    return;
+  }
+
+  // ==========================================
+  // RULE 3: EVALUATE TIMING VALIDATION WINDOWS
+  // ==========================================
+  unsigned long timeElapsedSec = (currentMillis - gateActivationTime) / 1000;
+  bool isArrivalWindowActive = (timeElapsedSec < (unsigned long)voiceGateOpenDurationSeconds);
+
+  if (isArrivalWindowActive) {
+    // A fresh arrival spike or phone ping has recently triggered the window!
+    String dynamicNameBuilder = "";
+    
+    // Check if a Bluetooth tracker is home and active within your keep-alive window
+    for (int i = 0; i < deviceCount; i++) {
+      if ((currentMillis - discoveredDevices[i].lastSeen) < ((unsigned long)presenceWindowSeconds * 1000)) {
+        for (int k = 0; k < authDeviceCount; k++) {
+          if (authDevices[k].macAddress == discoveredDevices[i].macAddress) {
+            if (dynamicNameBuilder != "") {
+              if (dynamicNameBuilder.indexOf(authDevices[k].friendlyName) == -1) {
+                dynamicNameBuilder += " & " + authDevices[k].friendlyName;
+              }
+            } else {
+              dynamicNameBuilder = authDevices[k].friendlyName;
+            }
+          }
+        }
+      }
+    }
+    
+    // Append active cellphone string if present
+    if (wifiSmartphoneFriendlyName != "") {
+      if (dynamicNameBuilder != "") {
+        if (dynamicNameBuilder.indexOf(wifiSmartphoneFriendlyName) == -1) {
+          dynamicNameBuilder += " & " + wifiSmartphoneFriendlyName;
+        }
+      } else {
+        dynamicNameBuilder = wifiSmartphoneFriendlyName;
+      }
+    }
+
+    // FIXED: If an authorized token or phone is active AND the arrival clock is ticking,
+    // we are officially permitted to flip the high-level security flags to TRUE!
+    if (dynamicNameBuilder != "") {
+      securitySystemDisableAuthorised = true; 
+      authorisingDeviceNames = dynamicNameBuilder;
+      currentGateState = GATE_AUTO_OPEN; // Sync state tracking Enum ID to 1
+    } else {
+      // No tokens are physically active inside the yard anymore, clear the string safely
+      authorisingDeviceNames = "Scanning...";
+    }
+
+  } else {
+    // 🔒 LOCKDOWN SINK: The countdown has run out! Securely drop the flags.
+    // Because it falls out of the timer window, it stays stably shut and can never 
+    // force itself back open until a new arrival spike resets the countdown clock!
+    securitySystemDisableAuthorised = false; 
+    authorisingDeviceNames = "Scanning...";
+    currentGateState = GATE_AUTO_CLOSED; // Sync state tracking Enum ID to 0
+  }
+
+  // =========================================================================
+  // 🔍 PRODUCTION GATE DIAGNOSTIC PRINTER 
+  // =========================================================================
+  static unsigned long lastDiagnosticPrint = 0;
+  if (currentMillis - lastDiagnosticPrint > 3000) { 
+    lastDiagnosticPrint = currentMillis;
+    
+    Serial.println("\n--- [4-STATE TRACE]: CORE VARIABLE INVENTORY ---");
+    Serial.print("  Global currentGateState Enum ID : "); Serial.println((int)currentGateState);
+    Serial.print("  securitySystemDisableAuth       : "); Serial.println(securitySystemDisableAuthorised ? "TRUE (OPEN)" : "FALSE (CLOSED)");
+    Serial.print("  Banner Name Text Displayed      : "); Serial.println(authorisingDeviceNames);
+    Serial.print("  Shared Wi-Fi String Registry    : "); Serial.println(wifiSmartphoneFriendlyName == "" ? "EMPTY" : wifiSmartphoneFriendlyName);
+    
+    long remaining = (long)voiceGateOpenDurationSeconds - (long)timeElapsedSec;
+    Serial.printf("  Countdown Validation Metrics    : Elapsed %lus | Remaining %lds | Limit %ds\n", 
+                  timeElapsedSec, remaining, voiceGateOpenDurationSeconds);
+    Serial.println("-------------------------------------------------");
+  }
 }
