@@ -36,7 +36,7 @@ Preferences prefs;  // Instantiate the permanent storage core instance
 #include <BLEAdvertisedDevice.h>
 
 #include <HTTPClient.h>
-//#include <WiFiClientSecure.h>
+#include <WiFiClientSecure.h> // Required for handling secure HTTPS api endpoints
 
 
 
@@ -262,55 +262,78 @@ String IdentifyManufacturer(String macAddress) {
 
 */
 
+ // a call to https://api.macvendors.com/98:B6:E9 gets back "Nintendo Co.,Ltd" on 15th July 2026
+
+
+
 String FetchVendorFromAPI(String prefix) {
-  // Verify network availability before running queries
-  if (WiFi.status() != WL_CONNECTED) return "Unknown Brand";
+  if (WiFi.status() != WL_CONNECTED) {
+    Serial.println("[API DIAGNOSTIC]: Network connection absent. Bypassing lookup.");
+    return "Unknown Brand";
+  }
+  
+  WiFiClientSecure client;
+  // Bypass strict SSL certificate validation to save substantial RAM and processing overhead
+  client.setInsecure(); 
   
   HTTPClient http;
-  // Free, high-speed HTTP alternative endpoint that uses minimal RAM memory space
-  String url = "http://macvendors.co" + prefix;
   
-  http.begin(url);
-  http.setTimeout(1500); // 1.5s connection protection safety gate
-  int httpCode = http.GET();
+  // Fully corrected secure REST endpoint path
+  String url = "https://api.macvendors.com/" + prefix; 
   
-  String result = "Unknown Brand";
+  Serial.print("[API DIAGNOSTIC]: Issuing HTTP request to -> ");
+  Serial.println(url);
   
-  if (httpCode == HTTP_CODE_OK) {
-    String rawJson = http.getString();
-    rawJson.trim();
+  // Initialize the transport channel with the secure client and target URL
+  if (http.begin(client, url)) { 
+    http.setTimeout(2500); // 2.5s window to accommodate secure handshake overhead
+    int httpCode = http.GET();
     
-    // Clean Occam's Razor JSON String Parser:
-    // Simply finds the "company" text label without using bloated external JSON parsing libraries
-    int companyIndex = rawJson.indexOf("\"company\":\"");
-    if (companyIndex != -1) {
-      int start = companyIndex + 11;
-      int end = rawJson.indexOf("\"", start);
-      if (end != -1) {
-        result = rawJson.substring(start, end);
+    String result = "Unknown Brand";
+    
+    if (httpCode == HTTP_CODE_OK) {
+      result = http.getString();
+      result.trim();
+      
+      if (result.length() > 0 && result.indexOf("Not Found") == -1) {
+        Serial.print("[API DIAGNOSTIC]: Success! Raw vendor string: ");
+        Serial.println(result);
+        
+        // Clean corporate punctuation artifacts out of database table records
+        result.replace(",Ltd", "");
+        result.replace(", Ltd", "");
+        result.replace("Co.,Ltd", "");
+        result.replace("Co., Ltd", "");
+        result.replace(".,", " ");
+        result.replace(",", " ");
+        result.replace(".", " ");
+        result.replace("  ", " "); 
         result.trim();
         
-        // Compact formatting filter: shorten enterprise strings for clean dashboard views
+        // Shorten giant manufacturer name blocks for clean alignment layouts
         if (result.indexOf("Samsung") != -1) result = "Samsung Device";
         else if (result.indexOf("Apple") != -1) result = "Apple Device";
+        else if (result.indexOf("Nintendo") != -1) result = "Nintendo Console";
         else if (result.indexOf("LG Electronics") != -1) result = "LG Smart TV";
         else if (result.indexOf("Sony") != -1) result = "Sony Device";
         else if (result.indexOf("Intel") != -1) result = "Intel Device";
         else if (result.indexOf("Huawei") != -1) result = "Huawei Device";
         else if (result.indexOf("Google") != -1) result = "Google Device";
         
-        // Enforce our 31-character buffer safety boundary limit
         if (result.length() > 30) result = result.substring(0, 30);
+      } else {
+        Serial.println("[API DIAGNOSTIC]: Device prefix not found in remote database.");
       }
+    } else {
+      Serial.printf("[API DIAGNOSTIC]: Transport failed or rejected! HTTP Error Code: %d\n", httpCode);
     }
+    
+    http.end(); 
+    return result;
   } else {
-    // If the network drops or times out, return Unknown so it flags our safety fallback latch
-    Serial.printf("[API ERROR]: HTTP Fetch Failed. Error Code: %d\n", httpCode);
+    Serial.println("[API DIAGNOSTIC]: Failed to securely open target endpoint connection channel.");
     return "Unknown Brand";
   }
-  
-  http.end();
-  return result;
 }
 
 String IdentifyManufacturer(String macAddress) {
@@ -342,7 +365,8 @@ String IdentifyManufacturer(String macAddress) {
 
   // 4. CACHE MISSED: Queue it for the background task thread and exit immediately!
   // This keeps your high-speed BLE callbacks running at maximum velocity.
-  if (pendingMacPrefix == "" && vendorCacheCount < MAX_CACHED_VENDORS) {
+  //if (pendingMacPrefix == "" && vendorCacheCount < MAX_CACHED_VENDORS) {
+if (pendingMacPrefix == "") {
     pendingMacPrefix = prefix; 
   }
 
@@ -415,53 +439,7 @@ class MyAdvertisedDeviceCallbacks : public BLEAdvertisedDeviceCallbacks {
     unsigned long now = millis();
     bool found = false;
 
-    /*
-    for (int i = 0; i < deviceCount; i++) {
-      if ((payloadSignature != "" && discoveredDevices[i].findMyFingerprint == payloadSignature) || (payloadSignature == "" && discoveredDevices[i].macAddress == currentMac)) {
-
-        // 1. CALCULATE SEPARATION GAP: Time elapsed since the ESP32 last processed this token
-        unsigned long timeSinceLastSeen = now - discoveredDevices[i].lastSeen;
-
-        // 2. BOOTSTRAP TRIGGER STRATEGY:
-        // A) If 'firstSeen' equals 'lastSeen', it means the device has NEVER tripped the gate since boot.
-        // B) If 'timeSinceLastSeen' is greater than your window, it has physically arrived from outside.
-        bool isBrandNewBootCapture = (discoveredDevices[i].firstSeen == discoveredDevices[i].lastSeen);
-        bool isFreshArrivalGapPassed = (timeSinceLastSeen > ((unsigned long)presenceWindowSeconds * 1000));
- 
-        if (isBrandNewBootCapture || isFreshArrivalGapPassed) {
-          discoveredDevices[i].firstSeen = now;
-
-          for (int k = 0; k < authDeviceCount; k++) {
-            if (authDevices[k].macAddress == currentMac) {
-              // Only open the gate if this specific Tile hasn't locked the latch yet
-              if (!authDevices[k].hasTrippedGate) {
-                String nameToLog = authDevices[k].friendlyName;
-                if (nameToLog == "") nameToLog = "Authorized Bluetooth Key";
-
-                triggerSecurityGate(nameToLog, currentMac);  // 👈 Added currentMac parameter
-                authDevices[k].hasTrippedGate = true;        // Lock the latch!
-              }
-            }
-          }
-        } else {
-          // If the device is continuously sitting here, make sure it stays latched
-          for (int k = 0; k < authDeviceCount; k++) {
-            if (authDevices[k].macAddress == currentMac) {
-              // Leave it locked while it's in range
-            }
-          }
-        }
-
-        // Keep core running metrics updated
-        discoveredDevices[i].macAddress = currentMac;
-        discoveredDevices[i].rssi = currentRssi;
-        discoveredDevices[i].lastSeen = now;
-        discoveredDevices[i].deviceType = manufacturer;
-        found = true;
-        break;
-      }
-    }
-*/
+    
     // Inside your MyAdvertisedDeviceCallbacks::onResult update memory matching engine:
     found = false;
     for (int i = 0; i < deviceCount; i++) {
@@ -1261,6 +1239,17 @@ void setup() {
     server.send(303);
   });
 
+  // ========================================================
+  // 🔍 EMERGENCY API DIAGNOSTIC TESTING ENDPOINT
+  // ========================================================
+  server.on("/testLookup", []() {
+    // Force queue an unrecognised corporate prefix (e.g., Nintendo Co., Ltd.)
+    pendingMacPrefix = "98:B6:E9"; 
+    
+    Serial.println("\n[WEB TEST]: Manually queued prefix 98:B6:E9 into background worker queue...");
+    server.send(200, "text/plain", "OUI Prefix 98:B6:E9 Pushed Into Background Queue!");
+  });
+
   server.begin();  // Always near the end of setup()
   //Serial.println(F("HTTP Web Server Started!"));
 
@@ -1285,6 +1274,60 @@ void setup() {
   delay(1000);
 
 }  // end of void setup
+
+void ProcessBackgroundVendorLookup() { // this routine has to be above void loop?
+  // Throttled gate execution: evaluate this process once every 4 seconds
+  
+  static unsigned long lastLookupCheckTime = 0;
+  if (millis() - lastLookupCheckTime < 4000) return;
+  lastLookupCheckTime = millis();
+Serial.println("\n--- [BACKGROUND WORKER]: ProcessBackgroundVendorLookup called every 4 secs  ---");
+  if (pendingMacPrefix != "" && WiFi.status() == WL_CONNECTED) {
+    String currentPrefix = pendingMacPrefix;
+    pendingMacPrefix = ""; // Clear immediately to release the queue lock
+
+    Serial.println("\n--- [BACKGROUND WORKER]: NEW TRANSACTION RETRIEVED ---");
+    Serial.printf("  Target OUI Prefix to Resolve: %s\n", currentPrefix.c_str());
+    Serial.printf("  Current Cache Size Status   : %d / %d slots used\n", vendorCacheCount, MAX_CACHED_VENDORS);
+    Serial.printf("  Target Destination FIFO Slot: Index %d\n", nextCacheSlot);
+    
+    String parsedVendor = FetchVendorFromAPI(currentPrefix);
+    
+    // CACHE PROTECTION LATCH:
+    // If the internet lookup fails, save it as a generic tracking element anyway!
+    // This stops unrecognised tokens from looping infinitely and choking your webpage.
+    if (parsedVendor == "Unknown Brand" || parsedVendor == "Searching...") {
+      parsedVendor = "Unknown Device"; 
+      Serial.println("[BACKGROUND WORKER]: Web lookup failed. Applying temporary 'Unknown Device' safety latch.");
+    }
+
+    int targetSlot = nextCacheSlot;
+
+    // FIXED: Copy the original prefix with its COLONS INTACT into your character arrays
+    strncpy(vendorCache[targetSlot].prefix, currentPrefix.c_str(), sizeof(vendorCache[targetSlot].prefix) - 1);
+    vendorCache[targetSlot].prefix[sizeof(vendorCache[targetSlot].prefix) - 1] = '\0'; // Null termination
+    
+    strncpy(vendorCache[targetSlot].vendorName, parsedVendor.c_str(), sizeof(vendorCache[targetSlot].vendorName) - 1);
+    vendorCache[targetSlot].vendorName[sizeof(vendorCache[targetSlot].vendorName) - 1] = '\0';
+    
+    if (vendorCacheCount < MAX_CACHED_VENDORS) {
+      vendorCacheCount++;
+    }
+
+    // Step our circular FIFO pointer positions forward
+    nextCacheSlot++;
+    if (nextCacheSlot >= MAX_CACHED_VENDORS) {
+      nextCacheSlot = 0; 
+      Serial.println("[BACKGROUND WORKER]: Cache allocation ceiling hit. FIFO recycling pointer back to Slot 0.");
+    }
+    
+    // Save cleanly to non-volatile flash slots
+    saveVendorToCacheFlash(targetSlot);
+    
+    Serial.printf("  Result Committed to Storage : %s -> %s\n", currentPrefix.c_str(), parsedVendor.c_str());
+    Serial.println("------------------------------------------------------");
+  }
+}
 
 void loop() {
 
@@ -2378,7 +2421,13 @@ bool Sec27AUnsetOn() {
   Serial.print("    Variable Check -> currentGateState ID: "); 
   Serial.println((int)currentGateState);
   Serial.print("    Active Token List Captured On Firing: "); 
-  Serial.println(authorisingDeviceNames);
+  //Serial.println(authorisingDeviceNames); did this cause a crash?
+
+   if (authorisingDeviceNames.length() > 0 && authorisingDeviceNames.length() < 256) {
+    Serial.println(authorisingDeviceNames.c_str());
+  } else {
+    Serial.println("[Buffer Guard: Empty or Overlarge String]");
+  }
 
 
   Serial.println("Request to Unset 27A Security received SW#2 On");
@@ -3560,49 +3609,3 @@ void EvaluateSecurityGateState() {
   */
 }
 
-void ProcessBackgroundVendorLookup() {
-  // Throttled gate execution: evaluate this process once every 4 seconds
-  static unsigned long lastLookupCheckTime = 0;
-  if (millis() - lastLookupCheckTime < 4000) return;
-  lastLookupCheckTime = millis();
-
-  if (pendingMacPrefix != "" && WiFi.status() == WL_CONNECTED) {
-    String currentPrefix = pendingMacPrefix;
-    pendingMacPrefix = ""; // Clear immediately to release the queue lock
-
-    Serial.printf("[BACKGROUND WORKER]: Resolving queued prefix %s via Web API...\n", currentPrefix.c_str());
-    
-    String parsedVendor = FetchVendorFromAPI(currentPrefix);
-    
-    // OUI CACHE PROTECTION LATCH:
-    // If the internet lookup fails, save it as a generic tracking element anyway!
-    // This stops unrecognised tokens from looping infinitely and choking your system.
-    if (parsedVendor == "Unknown Brand" || parsedVendor == "Searching...") {
-      parsedVendor = "Unknown Device"; 
-    }
-
-    int targetSlot = nextCacheSlot;
-
-    // FIXED: Copy the original prefix with its COLONS INTACT into your character arrays!
-    strncpy(vendorCache[targetSlot].prefix, currentPrefix.c_str(), sizeof(vendorCache[targetSlot].prefix) - 1);
-    vendorCache[targetSlot].prefix[sizeof(vendorCache[targetSlot].prefix) - 1] = '\0'; // Null termination
-    
-    strncpy(vendorCache[targetSlot].vendorName, parsedVendor.c_str(), sizeof(vendorCache[targetSlot].vendorName) - 1);
-    vendorCache[targetSlot].vendorName[sizeof(vendorCache[targetSlot].vendorName) - 1] = '\0';
-    
-    if (vendorCacheCount < MAX_CACHED_VENDORS) {
-      vendorCacheCount++;
-    }
-
-    // Step our circular FIFO pointer positions forward
-    nextCacheSlot++;
-    if (nextCacheSlot >= MAX_CACHED_VENDORS) {
-      nextCacheSlot = 0;
-      Serial.println("[CACHE NOTICE]: Buffer full. FIFO recycling index back to slot 0.");
-    }
-    
-    // Save cleanly to non-volatile flash slots
-    saveVendorToCacheFlash(targetSlot);
-    Serial.printf("[BACKGROUND COMPLETED]: Cached %s -> %s\n", currentPrefix.c_str(), parsedVendor.c_str());
-  }
-}
