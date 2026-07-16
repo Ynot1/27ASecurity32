@@ -36,8 +36,8 @@ Preferences prefs;  // Instantiate the permanent storage core instance
 #include <BLEAdvertisedDevice.h>
 
 #include <HTTPClient.h>
-#include <WiFiClientSecure.h>  // Required for handling secure HTTPS api endpoints
-
+//#include <WiFiClientSecure.h>  // Required for handling secure HTTPS api endpoints
+#include <WiFiClient.h>  // 
 
 // Function Prototype: Declares the gate signature upfront so the compiler recognizes it anywhere
 void EvaluateSecurityGateState();
@@ -269,29 +269,36 @@ String IdentifyManufacturer(String macAddress) {
 // a call to https://api.macvendors.com/98:B6:E9 gets back "Nintendo Co.,Ltd" on 15th July 2026
 
 
-
-String FetchVendorFromAPI(String prefix) {
+/*
+String FetchVendorFromAPI(String prefix) {. // towards https://api.macvendors.com
   if (WiFi.status() != WL_CONNECTED) {
     Serial.println("[API DIAGNOSTIC]: Network connection absent. Bypassing lookup.");
     return "Unknown Brand";
   }
-
+/*
   WiFiClientSecure client;
   // Bypass strict SSL certificate validation to save substantial RAM and processing overhead
   client.setInsecure();
 
+
+
+WiFiClient client;
+
   HTTPClient http;
 
   // Fully corrected secure REST endpoint path
-  String url = "https://api.macvendors.com/" + prefix;
+  //String url = "https://api.macvendors.com/" + prefix;
+   String url = "http://api.macvendors.com/" + prefix;
   
     url.toLowerCase(); // 👈 ADD THIS LINE HERE to force lower case charchters are sent for the mac lookup
 
-  Serial.print("[API DIAGNOSTIC]: Issuing HTTP request to -> ");
+  Serial.print("[API DIAGNOSTIC]: Issuing LOW-OVERHEAD  HTTP request to -> ");
   Serial.println(url);
 
   // Initialize the transport channel with the secure client and target URL
   if (http.begin(client, url)) {
+        // FIXED: Instructs the HTTP library to automatically follow the 301 redirect securely
+      http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS); 
     http.setTimeout(2500);  // 2.5s window to accommodate secure handshake overhead
     int httpCode = http.GET();
 
@@ -338,6 +345,78 @@ String FetchVendorFromAPI(String prefix) {
     return result;
   } else {
     Serial.println("[API DIAGNOSTIC]: Failed to securely open target endpoint connection channel.");
+    return "Unknown Brand";
+  }
+}
+
+*/
+
+String FetchVendorFromAPI(String prefix) {
+  if (WiFi.status() != WL_CONNECTED) {
+    Serial.println("[API DIAGNOSTIC]: Network connection absent. Bypassing lookup.");
+    return "Unknown Brand";
+  }
+
+  WiFiClient client; 
+  HTTPClient http;
+
+  // Use a completely unencrypted layout that doesn't trigger 301 redirections
+  //String url = "http://api/macvendors.co/vendor/" + prefix; 
+
+// browsing http://api.maclookup.app/v2/macs/98:b6:e9/company/name gets Nintendo Co.,Ltd
+String url = "http://api.maclookup.app/v2/macs/"+ prefix + "/company/name"; 
+  url.toLowerCase();
+
+  Serial.print("[API DIAGNOSTIC]: Issuing LOW-OVERHEAD HTTP request to -> ");
+  Serial.println(url);
+  
+  if (http.begin(client, url)) { 
+    http.setTimeout(2500); 
+    int httpCode = http.GET();
+    
+    String result = "Unknown Brand";
+    
+    if (httpCode == HTTP_CODE_OK) {
+      result = http.getString();
+      result.trim();
+      
+      if (result.length() > 0 && result.indexOf("Not Found") == -1 && result.indexOf("Invalid") == -1) {
+        Serial.print("[API DIAGNOSTIC]: Success! Raw vendor string: ");
+        Serial.println(result);
+        
+        // Clean corporate punctuation artifacts out of database table records
+        result.replace(",Ltd", "");
+        result.replace(", Ltd", "");
+        result.replace("Co.,Ltd", "");
+        result.replace("Co., Ltd", "");
+        result.replace(".,", " ");
+        result.replace(",", " ");
+        result.replace(".", " ");
+        result.replace("  ", " "); 
+        result.trim();
+        
+        // Compact formatting filter for common tech giants
+        if (result.indexOf("Samsung") != -1) result = "Samsung Device";
+        else if (result.indexOf("Apple") != -1) result = "Apple Device";
+        else if (result.indexOf("Nintendo") != -1) result = "Nintendo Console";
+        else if (result.indexOf("LG Electronics") != -1) result = "LG Smart TV";
+        else if (result.indexOf("Sony") != -1) result = "Sony Device";
+        else if (result.indexOf("Intel") != -1) result = "Intel Device";
+        else if (result.indexOf("Huawei") != -1) result = "Huawei Device";
+        else if (result.indexOf("Google") != -1) result = "Google Device";
+        
+        if (result.length() > 30) result = result.substring(0, 30);
+      } else {
+        Serial.println("[API DIAGNOSTIC]: Device prefix not found in remote database.");
+      }
+    } else {
+      Serial.printf("[API DIAGNOSTIC]: Transport failed! HTTP Error Code: %d\n", httpCode);
+    }
+    
+    http.end(); 
+    return result;
+  } else {
+    Serial.println("[API DIAGNOSTIC]: Failed to open connection channel.");
     return "Unknown Brand";
   }
 }
