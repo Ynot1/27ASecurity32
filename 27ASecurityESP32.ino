@@ -36,13 +36,16 @@ Preferences prefs;  // Instantiate the permanent storage core instance
 #include <BLEAdvertisedDevice.h>
 
 #include <HTTPClient.h>
-#include <WiFiClientSecure.h> // Required for handling secure HTTPS api endpoints
+#include <WiFiClientSecure.h>  // Required for handling secure HTTPS api endpoints
 
 
+// Function Prototype: Declares the gate signature upfront so the compiler recognizes it anywhere
+void EvaluateSecurityGateState();
 
+void SetupWirelessOTA();  // 👈 ADD THIS LINE
 
 //bool wifiSmartphonePresent = false;  // True when any paired 2FA phone is alive on Wi-Fi
-String wifiSmartphoneFriendlyName = ""; // Empty string when no cellphones are home
+String wifiSmartphoneFriendlyName = "";  // Empty string when no cellphones are home
 
 // Handle non-blocking timing loop for the OTA background processor
 unsigned long lastOtaCheck = 0;
@@ -112,15 +115,15 @@ struct AuthorisedIP {
 
 // Fixed-size structure to guarantee zero memory fragmentation over long runs
 struct CachedManufacturer {
-  char prefix[9];      // Holds "XX:XX:XX\0" (8 characters + null terminator)
-  char vendorName[32]; // Space for a clean 31-character brand descriptor string
+  char prefix[9];       // Holds "XX:XX:XX\0" (8 characters + null terminator)
+  char vendorName[32];  // Space for a clean 31-character brand descriptor string
 };
 
-const int MAX_CACHED_VENDORS = 50; // Cap at 50 slots to protect your dynamic RAM limits
+const int MAX_CACHED_VENDORS = 50;  // Cap at 50 slots to protect your dynamic RAM limits
 CachedManufacturer vendorCache[MAX_CACHED_VENDORS];
 int vendorCacheCount = 0;
-int nextCacheSlot = 0;             // Tracks the circular FIFO index pointer
-String pendingMacPrefix = ""; // 👈 NEW: Dedicated, isolated background lookup queue
+int nextCacheSlot = 0;         // Tracks the circular FIFO index pointer
+String pendingMacPrefix = "";  // 👈 NEW: Dedicated, isolated background lookup queue
 
 #define MAX_AUTH_IPS 10
 AuthorisedIP authIPs[MAX_AUTH_IPS];
@@ -141,6 +144,7 @@ int authDeviceCount = 0;
 const int MAX_DEVICES = 30;
 TrackedBeacon discoveredDevices[MAX_DEVICES];
 int deviceCount = 0;
+volatile bool isBluetoothRadioBusy = false;  // 👈 Thread-safe hardware monitor flag
 
 // Adjustable 2FA validation window via web interface (Default: 30 seconds)
 // Global settings configurations
@@ -262,7 +266,7 @@ String IdentifyManufacturer(String macAddress) {
 
 */
 
- // a call to https://api.macvendors.com/98:B6:E9 gets back "Nintendo Co.,Ltd" on 15th July 2026
+// a call to https://api.macvendors.com/98:B6:E9 gets back "Nintendo Co.,Ltd" on 15th July 2026
 
 
 
@@ -271,34 +275,36 @@ String FetchVendorFromAPI(String prefix) {
     Serial.println("[API DIAGNOSTIC]: Network connection absent. Bypassing lookup.");
     return "Unknown Brand";
   }
-  
+
   WiFiClientSecure client;
   // Bypass strict SSL certificate validation to save substantial RAM and processing overhead
-  client.setInsecure(); 
-  
+  client.setInsecure();
+
   HTTPClient http;
-  
+
   // Fully corrected secure REST endpoint path
-  String url = "https://api.macvendors.com/" + prefix; 
+  String url = "https://api.macvendors.com/" + prefix;
   
+    url.toLowerCase(); // 👈 ADD THIS LINE HERE to force lower case charchters are sent for the mac lookup
+
   Serial.print("[API DIAGNOSTIC]: Issuing HTTP request to -> ");
   Serial.println(url);
-  
+
   // Initialize the transport channel with the secure client and target URL
-  if (http.begin(client, url)) { 
-    http.setTimeout(2500); // 2.5s window to accommodate secure handshake overhead
+  if (http.begin(client, url)) {
+    http.setTimeout(2500);  // 2.5s window to accommodate secure handshake overhead
     int httpCode = http.GET();
-    
+
     String result = "Unknown Brand";
-    
+
     if (httpCode == HTTP_CODE_OK) {
       result = http.getString();
       result.trim();
-      
+
       if (result.length() > 0 && result.indexOf("Not Found") == -1) {
         Serial.print("[API DIAGNOSTIC]: Success! Raw vendor string: ");
         Serial.println(result);
-        
+
         // Clean corporate punctuation artifacts out of database table records
         result.replace(",Ltd", "");
         result.replace(", Ltd", "");
@@ -307,9 +313,9 @@ String FetchVendorFromAPI(String prefix) {
         result.replace(".,", " ");
         result.replace(",", " ");
         result.replace(".", " ");
-        result.replace("  ", " "); 
+        result.replace("  ", " ");
         result.trim();
-        
+
         // Shorten giant manufacturer name blocks for clean alignment layouts
         if (result.indexOf("Samsung") != -1) result = "Samsung Device";
         else if (result.indexOf("Apple") != -1) result = "Apple Device";
@@ -319,7 +325,7 @@ String FetchVendorFromAPI(String prefix) {
         else if (result.indexOf("Intel") != -1) result = "Intel Device";
         else if (result.indexOf("Huawei") != -1) result = "Huawei Device";
         else if (result.indexOf("Google") != -1) result = "Google Device";
-        
+
         if (result.length() > 30) result = result.substring(0, 30);
       } else {
         Serial.println("[API DIAGNOSTIC]: Device prefix not found in remote database.");
@@ -327,8 +333,8 @@ String FetchVendorFromAPI(String prefix) {
     } else {
       Serial.printf("[API DIAGNOSTIC]: Transport failed or rejected! HTTP Error Code: %d\n", httpCode);
     }
-    
-    http.end(); 
+
+    http.end();
     return result;
   } else {
     Serial.println("[API DIAGNOSTIC]: Failed to securely open target endpoint connection channel.");
@@ -349,7 +355,7 @@ String IdentifyManufacturer(String macAddress) {
   // 2. IN-MEMORY LOCAL CACHE LOOKUP (Instant check)
   for (int i = 0; i < vendorCacheCount; i++) {
     if (String(vendorCache[i].prefix) == prefix) {
-      return String(vendorCache[i].vendorName); // Instant cache hit!
+      return String(vendorCache[i].vendorName);  // Instant cache hit!
     }
   }
 
@@ -358,19 +364,18 @@ String IdentifyManufacturer(String macAddress) {
   if (privateChar == 'B' || privateChar == 'b' || privateChar == 'F' || privateChar == 'f' || privateChar == '9') {
     return "Randomised Private Smartphone/Tablet";
   }
-  if (privateChar == '2' || privateChar == '3' || privateChar == '6' || privateChar == '5' || 
-      privateChar == '7' || privateChar == 'A' || privateChar == 'a' || privateChar == 'E' || privateChar == 'e') {
+  if (privateChar == '2' || privateChar == '3' || privateChar == '6' || privateChar == '5' || privateChar == '7' || privateChar == 'A' || privateChar == 'a' || privateChar == 'E' || privateChar == 'e') {
     return "Locally Administered / Private Randomized";
   }
 
   // 4. CACHE MISSED: Queue it for the background task thread and exit immediately!
   // This keeps your high-speed BLE callbacks running at maximum velocity.
   //if (pendingMacPrefix == "" && vendorCacheCount < MAX_CACHED_VENDORS) {
-if (pendingMacPrefix == "") {
-    pendingMacPrefix = prefix; 
+  if (pendingMacPrefix == "") {
+    pendingMacPrefix = prefix;
   }
 
-  return "Unknown Brand"; // Safe temporary fallback label
+  return "Unknown Brand";  // Safe temporary fallback label
 }
 
 class MyAdvertisedDeviceCallbacks : public BLEAdvertisedDeviceCallbacks {
@@ -439,7 +444,7 @@ class MyAdvertisedDeviceCallbacks : public BLEAdvertisedDeviceCallbacks {
     unsigned long now = millis();
     bool found = false;
 
-    
+
     // Inside your MyAdvertisedDeviceCallbacks::onResult update memory matching engine:
     found = false;
     for (int i = 0; i < deviceCount; i++) {
@@ -569,11 +574,11 @@ class MyAdvertisedDeviceCallbacks : public BLEAdvertisedDeviceCallbacks {
 
           // --- EXECUTE THE GATE UNLOCK ACTION PATHS ---
           //triggerSecurityGate(matchedFriendlyName, currentMac);
-                    // ⚡ REPLACE IT WITH DIRECT RUNTIME LIFTS:
-          securitySystemDisableAuthorised = true; // Flips the gate open natively!
-          gateActivationTime = millis();          // Start your fresh arrival duration clock
+          // ⚡ REPLACE IT WITH DIRECT RUNTIME LIFTS:
+          securitySystemDisableAuthorised = true;  // Flips the gate open natively!
+          gateActivationTime = millis();           // Start your fresh arrival duration clock
           authorisingDeviceNames = matchedFriendlyName;
-          
+
           for (int k = 0; k < authDeviceCount; k++) {
             if (authDevices[k].macAddress == currentMac) {
               authDevices[k].hasTrippedGate = true;
@@ -710,21 +715,21 @@ void loadConfigurationFromFlash() {
 }
 
 void loadVendorCache() {
-  prefs.begin("mfg_cache", true); // Open separate isolated namespace as read-only
+  prefs.begin("mfg_cache", true);  // Open separate isolated namespace as read-only
   vendorCacheCount = prefs.getInt("count", 0);
-  nextCacheSlot    = prefs.getInt("next_slot", 0); // Restore FIFO pointer on boot
-  
+  nextCacheSlot = prefs.getInt("next_slot", 0);  // Restore FIFO pointer on boot
+
   if (vendorCacheCount > MAX_CACHED_VENDORS) vendorCacheCount = MAX_CACHED_VENDORS;
   if (nextCacheSlot >= MAX_CACHED_VENDORS) nextCacheSlot = 0;
-  
+
   for (int i = 0; i < vendorCacheCount; i++) {
     String savedPfx = prefs.getString(("p" + String(i)).c_str(), "");
     String savedVnd = prefs.getString(("v" + String(i)).c_str(), "Unknown");
-    
+
     // Safely copy string data directly into your permanent struct buffers
     strncpy(vendorCache[i].prefix, savedPfx.c_str(), sizeof(vendorCache[i].prefix) - 1);
-    vendorCache[i].prefix[sizeof(vendorCache[i].prefix) - 1] = '\0'; // Enforce null termination
-    
+    vendorCache[i].prefix[sizeof(vendorCache[i].prefix) - 1] = '\0';  // Enforce null termination
+
     strncpy(vendorCache[i].vendorName, savedVnd.c_str(), sizeof(vendorCache[i].vendorName) - 1);
     vendorCache[i].vendorName[sizeof(vendorCache[i].vendorName) - 1] = '\0';
   }
@@ -733,11 +738,11 @@ void loadVendorCache() {
 }
 
 void saveVendorToCacheFlash(int index) {
-  prefs.begin("mfg_cache", false); // Open namespace in read/write mode
+  prefs.begin("mfg_cache", false);  // Open namespace in read/write mode
   prefs.putString(("p" + String(index)).c_str(), vendorCache[index].prefix);
   prefs.putString(("v" + String(index)).c_str(), vendorCache[index].vendorName);
   prefs.putInt("count", vendorCacheCount);
-  prefs.putInt("next_slot", nextCacheSlot); // Secure the trailing circular pointer
+  prefs.putInt("next_slot", nextCacheSlot);  // Secure the trailing circular pointer
   prefs.end();
 }
 
@@ -851,6 +856,9 @@ IPAddress primaryDNS(8, 8, 8, 8);    // Google DNS (crucial for NTP time sync)
 IPAddress secondaryDNS(8, 8, 4, 4);  // Optional backup DNS
 
 void setup() {
+
+  // Expand the main loop stack safety buffer right at boot
+  // xTaskCreatePinnedToCore([](void* p) { while(1) { loop(); } }, "loopTask", 8192, NULL, 1, NULL, 1); // crashes ALL THE TIME
 
 
 
@@ -1244,8 +1252,8 @@ void setup() {
   // ========================================================
   server.on("/testLookup", []() {
     // Force queue an unrecognised corporate prefix (e.g., Nintendo Co., Ltd.)
-    pendingMacPrefix = "98:B6:E9"; 
-    
+    pendingMacPrefix = "98:B6:E9";
+
     Serial.println("\n[WEB TEST]: Manually queued prefix 98:B6:E9 into background worker queue...");
     server.send(200, "text/plain", "OUI Prefix 98:B6:E9 Pushed Into Background Queue!");
   });
@@ -1275,12 +1283,82 @@ void setup() {
 
 }  // end of void setup
 
+void ProcessBackgroundVendorLookup() {
+  // Throttled gate execution: evaluate this process once every 6 seconds
+  static unsigned long lastLookupCheckTime = 0;
+  if (millis() - lastLookupCheckTime < 6000) return;
+  lastLookupCheckTime = millis();
+
+  // THREAD-SAFE GATING: Check our local flag instead of hitting the raw Bluetooth hardware object
+  if (pendingMacPrefix != "" && WiFi.status() == WL_CONNECTED) {
+
+    // If the scanner is currently running, turn it off cleanly using the proper task command
+    if (isBluetoothRadioBusy && pBLEScan != nullptr) {
+      Serial.println("[BACKGROUND WORKER]: Pausing Bluetooth scan safely to clear an HTTPS window...");
+      pBLEScan->stop();
+      isBluetoothRadioBusy = false;
+      vTaskDelay(pdMS_TO_TICKS(100));  // Give NimBLE 100ms to completely settle its memory stack
+    }
+
+    Serial.println("\n--- [BACKGROUND WORKER]: NEW TRANSACTION RETRIEVED ---");
+    Serial.printf("  Target OUI Prefix to Resolve: %s\n", pendingMacPrefix.c_str());
+
+    String currentPrefix = pendingMacPrefix;
+    pendingMacPrefix = "";  // Clear immediately to release the queue lock
+
+    String parsedVendor = FetchVendorFromAPI(currentPrefix);
+
+    if (parsedVendor == "Unknown Brand" || parsedVendor == "Searching...") {
+      parsedVendor = "Unknown Device";
+    }
+
+    // --- Safe Memory Buffer Writing ---
+    int targetSlot = nextCacheSlot;
+    if (targetSlot >= 0 && targetSlot < MAX_CACHED_VENDORS) {
+      memset(vendorCache[targetSlot].prefix, 0, sizeof(vendorCache[targetSlot].prefix));
+      strncpy(vendorCache[targetSlot].prefix, currentPrefix.c_str(), 8);
+
+      memset(vendorCache[targetSlot].vendorName, 0, sizeof(vendorCache[targetSlot].vendorName));
+      strncpy(vendorCache[targetSlot].vendorName, parsedVendor.c_str(), 30);
+
+      if (vendorCacheCount < MAX_CACHED_VENDORS) vendorCacheCount++;
+
+      nextCacheSlot++;
+      if (nextCacheSlot >= MAX_CACHED_VENDORS) nextCacheSlot = 0;
+
+      // The diagnostic return is gone! Flash saving is fully reactivated safely
+      saveVendorToCacheFlash(targetSlot);
+      Serial.printf("  Result Committed to Storage : %s -> %s\n", currentPrefix.c_str(), parsedVendor.c_str());
+    }
+
+    // RESUME BLUETOOTH WALKS: Turn the radio back on for your security filters
+    if (pBLEScan != nullptr) {
+      Serial.println("[BACKGROUND WORKER]: Lookup finished. Resuming active Bluetooth scan windows.");
+      isBluetoothRadioBusy = true;
+      pBLEScan->start(3, false);
+    }
+    Serial.println("------------------------------------------------------");
+  }
+}
+/*
+
+some debug went on in here, might need this later
 void ProcessBackgroundVendorLookup() { // this routine has to be above void loop?
   // Throttled gate execution: evaluate this process once every 4 seconds
+
+   // sytem stable for4 12 hrs with the return here return; // ⚠️ TEMPORARY DIAGNOSTIC KILL-SWITCH
   
   static unsigned long lastLookupCheckTime = 0;
   if (millis() - lastLookupCheckTime < 4000) return;
   lastLookupCheckTime = millis();
+
+ // FIXED SAFETY GATE: If the Bluetooth stack is currently busy scanning,
+  // skip this look-up turn to prevent secure HTTPS network memory collisions!
+  if (pBLEScan != nullptr && pBLEScan->isScanning()) {
+    Serial.println("[BACKGROUND WORKER]: Bluetooth scan active. Delaying API lookup to prevent memory collision.");
+    return; // still crashes with return here occaisionally
+  } // this code installed 09:13 , found a reboot at 13:30 could have been more of them)
+
 Serial.println("\n--- [BACKGROUND WORKER]: ProcessBackgroundVendorLookup called every 4 secs  ---");
   if (pendingMacPrefix != "" && WiFi.status() == WL_CONNECTED) {
     String currentPrefix = pendingMacPrefix;
@@ -1291,8 +1369,7 @@ Serial.println("\n--- [BACKGROUND WORKER]: ProcessBackgroundVendorLookup called 
     Serial.printf("  Current Cache Size Status   : %d / %d slots used\n", vendorCacheCount, MAX_CACHED_VENDORS);
     Serial.printf("  Target Destination FIFO Slot: Index %d\n", nextCacheSlot);
     
-    String parsedVendor = FetchVendorFromAPI(currentPrefix);
-    
+    String parsedVendor = FetchVendorFromAPI(currentPrefix);  i
     // CACHE PROTECTION LATCH:
     // If the internet lookup fails, save it as a generic tracking element anyway!
     // This stops unrecognised tokens from looping infinitely and choking your webpage.
@@ -1300,6 +1377,10 @@ Serial.println("\n--- [BACKGROUND WORKER]: ProcessBackgroundVendorLookup called 
       parsedVendor = "Unknown Device"; 
       Serial.println("[BACKGROUND WORKER]: Web lookup failed. Applying temporary 'Unknown Device' safety latch.");
     }
+
+
+  // immediate crash when return here. unstable on reboot after that return; // ⚠️ TEMPORARY DIAGNOSTIC KILL-SWITCH
+
 
     int targetSlot = nextCacheSlot;
 
@@ -1320,7 +1401,9 @@ Serial.println("\n--- [BACKGROUND WORKER]: ProcessBackgroundVendorLookup called 
       nextCacheSlot = 0; 
       Serial.println("[BACKGROUND WORKER]: Cache allocation ceiling hit. FIFO recycling pointer back to Slot 0.");
     }
-    
+    return; // ⚠️ TEMPORARY DIAGNOSTIC KILL-SWITCH put here at 08:45, rebooted at 09:05
+
+
     // Save cleanly to non-volatile flash slots
     saveVendorToCacheFlash(targetSlot);
     
@@ -1328,6 +1411,8 @@ Serial.println("\n--- [BACKGROUND WORKER]: ProcessBackgroundVendorLookup called 
     Serial.println("------------------------------------------------------");
   }
 }
+
+*/
 
 void loop() {
 
@@ -1483,7 +1568,7 @@ void loop() {
   // Process incoming web browser connections instantly without locking the CPU
   server.handleClient();
 
-   // ⚡ NEW: Safely processes queued web queries without freezing your scanners
+  // ⚡ NEW: Safely processes queued web queries without freezing your scanners
   ProcessBackgroundVendorLookup();
 
   delay(1);  // Crucial safety yield to prevent watchdog timer resets
@@ -1782,26 +1867,26 @@ works, but irrelevant
     }
   }
 
- // --- DYNAMIC 4-STATE CSS INDICATOR SELECTION ---
-  String bannerColor = "#ffcccc"; // Default Light Red (GATE_AUTO_CLOSED)
+  // --- DYNAMIC 4-STATE CSS INDICATOR SELECTION ---
+  String bannerColor = "#ffcccc";  // Default Light Red (GATE_AUTO_CLOSED)
   String bannerTextColor = "#800000";
   String bannerText = "ALEXA DISARM GATE: CLOSED (AUTO)";
 
   // If in standard auto-open mode
   if (currentGateState == GATE_AUTO_OPEN || (currentGateState == GATE_AUTO_CLOSED && securitySystemDisableAuthorised)) {
-    bannerColor = "#ccffcc";     // Light Green
+    bannerColor = "#ccffcc";  // Light Green
     bannerTextColor = "#006600";
     bannerText = "ALEXA DISARM GATE: OPEN (AUTO)";
-  } 
+  }
   // If forced permanently open
   else if (currentGateState == GATE_BYPASS) {
-    bannerColor = "#006600";     // Dark Green
-    bannerTextColor = "#ffffff"; // White text for strong contrast
+    bannerColor = "#006600";      // Dark Green
+    bannerTextColor = "#ffffff";  // White text for strong contrast
     bannerText = "ALEXA DISARM GATE: BYPASSED (PERMANENTLY OPEN)";
-  } 
+  }
   // If forced permanently closed
   else if (currentGateState == GATE_DISABLED) {
-    bannerColor = "#990000";     // Dark Red
+    bannerColor = "#990000";  // Dark Red
     bannerTextColor = "#ffffff";
     bannerText = "ALEXA DISARM GATE: FORCE DISABLED (PERMANENTLY LOCKED)";
   }
@@ -1809,14 +1894,14 @@ works, but irrelevant
   // Inject the Visual Indicator Header Banner to the top of your layout
   html += "<div style='background-color:" + bannerColor + "; color:" + bannerTextColor + "; padding:14px; font-weight:bold; font-size:1.15em; border-radius:6px; margin:15px auto; width:95%; max-width:650px; text-align:center; border:1px solid rgba(0,0,0,0.1);'>";
   html += bannerText;
-  
+
   // --- NEW RESTORATION: SHOW AUTHORISING TOKEN NAME & TIMER ---
   // Only display the countdown timer details if the gate is dynamically held open by an active target
   if (securitySystemDisableAuthorised && currentGateState != GATE_BYPASS) {
     unsigned long nowMs = millis();
     unsigned long secondsElapsed = (nowMs - gateActivationTime) / 1000;
     long secondsRemaining = (long)voiceGateOpenDurationSeconds - (long)secondsElapsed;
-    
+
     if (secondsRemaining < 0) secondsRemaining = 0;
 
     html += "<div style='font-size:0.8em; font-weight:normal; margin-top:6px; opacity:0.9;'>";
@@ -1824,7 +1909,7 @@ works, but irrelevant
     html += "  Gate Closes In: <b>" + String(secondsRemaining) + "s</b>";
     html += "</div>";
   }
-  
+
   html += "</div>";
 
   // --- RENDERING MANUAL OVERRIDE CONTROL BUTTON PANEL ---
@@ -2415,15 +2500,15 @@ bool Sec27ASetOff() {
 
 bool Sec27AUnsetOn() {
 
-   Serial.println("\n>>> [RELAY TRANSACTION EXECUTE]: Sec27AUnsetOn Fired!");
-  Serial.print("    Variable Check -> securitySystemDisableAuthorised: "); 
+  Serial.println("\n>>> [RELAY TRANSACTION EXECUTE]: Sec27AUnsetOn Fired!");
+  Serial.print("    Variable Check -> securitySystemDisableAuthorised: ");
   Serial.println(securitySystemDisableAuthorised ? "1 (TRUE/OPEN)" : "0 (FALSE/CLOSED)");
-  Serial.print("    Variable Check -> currentGateState ID: "); 
+  Serial.print("    Variable Check -> currentGateState ID: ");
   Serial.println((int)currentGateState);
-  Serial.print("    Active Token List Captured On Firing: "); 
+  Serial.print("    Active Token List Captured On Firing: ");
   //Serial.println(authorisingDeviceNames); did this cause a crash?
 
-   if (authorisingDeviceNames.length() > 0 && authorisingDeviceNames.length() < 256) {
+  if (authorisingDeviceNames.length() > 0 && authorisingDeviceNames.length() < 256) {
     Serial.println(authorisingDeviceNames.c_str());
   } else {
     Serial.println("[Buffer Guard: Empty or Overlarge String]");
@@ -2434,14 +2519,14 @@ bool Sec27AUnsetOn() {
   ProxyRequestText = "Alexa or Local Web Unset Request";
   RotateProxyLogArray();
 
-  if (Sec27ASetState == LOW) {  // only pulse relay if Burglar Alarm is currently Set
-   if (securitySystemDisableAuthorised == true) { // this worked for bluetooth, but was unstable for phones
-  
-      
+  if (Sec27ASetState == LOW) {                      // only pulse relay if Burglar Alarm is currently Set
+    if (securitySystemDisableAuthorised == true) {  // this worked for bluetooth, but was unstable for phones
+
+
       // Since it's valid, lock the flag false if you want it to be a one-shot on success
-      securitySystemDisableAuthorised = false; 
+      securitySystemDisableAuthorised = false;
       Serial.println("    [TRANSACTION MATCHED]: Variable is TRUE! Firing serial relays now...");
-     securitySystemDisableAuthorised = false; // Does this force the gate to close again after a sucessfull disarm?
+      securitySystemDisableAuthorised = false;  // Does this force the gate to close again after a sucessfull disarm?
 
       //Serial.println("XXX Pulsing Relay on ...");
       // AlarmSetLockout = LOW; // reset the lockout for the turn on function
@@ -2485,7 +2570,7 @@ bool Sec27AUnsetOn() {
       delay(10);
       //Serial.println("Turning Relay#1 Off ...");
     } else {  // if (securitySystemDisableAuthorised == true)
-    Serial.println("    [DENIED]: Request blocked because securitySystemDisableAuthorised is FALSE.");
+      Serial.println("    [DENIED]: Request blocked because securitySystemDisableAuthorised is FALSE.");
       Serial.println("27A Security UnSet Request NOT Honored - No Auth keys found");
       ProxyRequestText = "UnSet Request NOT Honored - No Auth keys found";
       RotateProxyLogArray();
@@ -2955,9 +3040,11 @@ void networkPingTaskEngine(void* parameter) {
       IPAddress localIP = WiFi.localIP();
       uint8_t myOwnLastQuad = localIP[3];  // Identify self IP quad
 
-      if (pBLEScan != nullptr) pBLEScan->stop();
-      vTaskDelay(pdMS_TO_TICKS(30));  
-
+      if (pBLEScan != nullptr) {
+        pBLEScan->stop();
+        isBluetoothRadioBusy = false;  // 👈 Radio is now clear!
+        vTaskDelay(pdMS_TO_TICKS(30));
+      }
       for (int i = 0; i < authIPCount; i++) {
         if (authIPs[i].lastQuad == 0) continue;
 
@@ -2983,13 +3070,13 @@ void networkPingTaskEngine(void* parameter) {
                 foundInHistory = true;
                 unsigned long elapsedAwayTime = nowMs - departureHistory[h].longGoneSince;
 
-                Serial.printf("[PING DIAGNOSTIC] Phone Return Detected. Required: %lu s | Actual Away: %lu s\n", 
+                Serial.printf("[PING DIAGNOSTIC] Phone Return Detected. Required: %lu s | Actual Away: %lu s\n",
                               requiredAbsenceMs / 1000, elapsedAwayTime / 1000);
 
                 if (elapsedAwayTime > requiredAbsenceMs) {
                   passesAbsenceFence = true;
                 }
-                
+
                 for (int k = h; k < historicalCount - 1; k++) {
                   departureHistory[k] = departureHistory[k + 1];
                 }
@@ -2999,25 +3086,25 @@ void networkPingTaskEngine(void* parameter) {
             }
 
             if (!foundInHistory) {
-              passesAbsenceFence = false; 
+              passesAbsenceFence = false;
             }
           }
 
-          // FIXED: Completely removed triggerSecurityGate. 
+          // FIXED: Completely removed triggerSecurityGate.
           // The background task now strictly updates its internal state records.
           if (!authIPs[i].isOnline && !authIPs[i].hasTrippedGate) {
             if (passesAbsenceFence) {
               Serial.print("🌟 [WIFI VALIDATED]: Phone cleared the absence fence: ");
               Serial.println(authIPs[i].friendlyName);
-              
+
               // Instead of calling an external function, we set your standard arrival triggers natively
-              authIPs[i].hasTrippedGate = true; 
+              authIPs[i].hasTrippedGate = true;
               authIPs[i].firstSeen = nowMs;
-              gateActivationTime = nowMs; // Kick off your "Fresh Arrival" duration countdown
+              gateActivationTime = nowMs;  // Kick off your "Fresh Arrival" duration countdown
             } else {
               Serial.print("⚠️ [WIFI SUPPRESSED]: Background sleep re-connection caught for: ");
               Serial.println(authIPs[i].friendlyName);
-              authIPs[i].hasTrippedGate = true; 
+              authIPs[i].hasTrippedGate = true;
               authIPs[i].firstSeen = nowMs;
             }
           }
@@ -3040,81 +3127,87 @@ void networkPingTaskEngine(void* parameter) {
               departureHistory[historicalCount].identifier = uniquePhoneID;
               departureHistory[historicalCount].longGoneSince = millis();
               historicalCount++;
-               // ⚡ REWORKED TO THIS LIGHTWEIGHT STRING OUTLET:
-  Serial.print("[WIFI WORKER]: Phone shifted to history. ID: ");
-  Serial.println(authIPs[i].lastQuad);
+              // ⚡ REWORKED TO THIS LIGHTWEIGHT STRING OUTLET:
+              Serial.print("[WIFI WORKER]: Phone shifted to history. ID: ");
+              Serial.println(authIPs[i].lastQuad);
             }
           }
 
           authIPs[i].isOnline = false;
-          authIPs[i].hasTrippedGate = false; 
+          authIPs[i].hasTrippedGate = false;
         }
-      } 
+      }
 
       // --- UPDATING THE MIDDLEMAN TEXT STRING FOR THE GATE ENGINE ---
       String phoneHomeName = "";
       unsigned long currentNow = millis();
-      
+
       for (int i = 0; i < authIPCount; i++) {
         if (authIPs[i].isOnline) {
           unsigned long ageMs = currentNow - authIPs[i].lastSeen;
           unsigned long maxAllowedAgeMs = (unsigned long)presenceWindowSeconds * 1000;
-          
+
           if (ageMs < maxAllowedAgeMs && authIPs[i].hasTrippedGate) {
             if (currentGateState != GATE_DISABLED) {
-              phoneHomeName = authIPs[i].friendlyName; 
+              phoneHomeName = authIPs[i].friendlyName;
               if (phoneHomeName == "") phoneHomeName = "Authorized Smartphone (Wi-Fi)";
-              break; 
+              break;
             }
           }
         }
       }
-      wifiSmartphoneFriendlyName = phoneHomeName; 
+      wifiSmartphoneFriendlyName = phoneHomeName;
 
-      if (pBLEScan != nullptr) pBLEScan->start(3, false);
-    }
+      if (pBLEScan != nullptr) {
+        isBluetoothRadioBusy = true;  // 👈 Radio is now occupied!
+        pBLEScan->start(3, false);
+      }
 
+      } // 👈 Bracket 1: Closes -> if (WiFi.status() == WL_CONNECTED && authIPCount > 0)
+
+    // SAFE PLACEMENT: Delays happen out here so the task never spins at 100% CPU if WiFi fails
     int delaySeconds = networkPingIntervalSeconds;
     if (delaySeconds < 1) delaySeconds = 1;
     vTaskDelay(pdMS_TO_TICKS(delaySeconds * 1000));
+
+  } // 👈 Bracket 2: Closes -> while (true)
+} // closes void networkPingTaskEngine
+
+  void SetupWirelessOTA() {
+    // Set the network name that will show up in your Arduino IDE Ports list
+    ArduinoOTA.setHostname("SecurityGateway-C3");
+
+    // Authentication Password (highly recommended for a home security gateway!)
+    ArduinoOTA.setPassword("TonySecurePass123");
+
+    // Display operational updates directly inside your serial logs
+    ArduinoOTA.onStart([]() {
+      String type = (ArduinoOTA.getCommand() == U_FLASH) ? "sketch" : "filesystem";
+      Serial.println("\n--- OTA ALERT: Wireless Update Started ---");
+      Serial.println("Updating " + type);
+
+      // CRITICAL: Kill the Bluetooth background radio instantly to free up 100%
+      // of the antenna bandwidth for the incoming Wi-Fi upload!
+      if (pBLEScan) {
+        pBLEScan->stop();
+        Serial.println("System Handle: BLE Scanner Paused for fast Wi-Fi download.");
+      }
+    });
+
+    ArduinoOTA.onError([](ota_error_t error) {
+      Serial.printf("OTA Error [%u]\n", error);
+
+      // FALLBACK: If the download fails, restart the Bluetooth scanner automatically
+      if (pBLEScan) {
+        pBLEScan->start(scanSliceDuration, nullptr, false);
+      }
+    });
+
+    // Launch the background wireless network listeners
+    ArduinoOTA.begin();
+    Serial.println("System Alert: Wireless OTA Network Listeners Active.");
   }
-}
-
-void SetupWirelessOTA() {
-  // Set the network name that will show up in your Arduino IDE Ports list
-  ArduinoOTA.setHostname("SecurityGateway-C3");
-
-  // Authentication Password (highly recommended for a home security gateway!)
-  ArduinoOTA.setPassword("TonySecurePass123");
-
-  // Display operational updates directly inside your serial logs
-  ArduinoOTA.onStart([]() {
-    String type = (ArduinoOTA.getCommand() == U_FLASH) ? "sketch" : "filesystem";
-    Serial.println("\n--- OTA ALERT: Wireless Update Started ---");
-    Serial.println("Updating " + type);
-
-    // CRITICAL: Kill the Bluetooth background radio instantly to free up 100%
-    // of the antenna bandwidth for the incoming Wi-Fi upload!
-    if (pBLEScan) {
-      pBLEScan->stop();
-      Serial.println("System Handle: BLE Scanner Paused for fast Wi-Fi download.");
-    }
-  });
-
-  ArduinoOTA.onError([](ota_error_t error) {
-    Serial.printf("OTA Error [%u]\n", error);
-
-    // FALLBACK: If the download fails, restart the Bluetooth scanner automatically
-    if (pBLEScan) {
-      pBLEScan->start(scanSliceDuration, nullptr, false);
-    }
-  });
-
-  // Launch the background wireless network listeners
-  ArduinoOTA.begin();
-  Serial.println("System Alert: Wireless OTA Network Listeners Active.");
-}
-/*
+  /*
 void handleRadioParams() {
   if (server.hasArg("rssi"))      rssiThreshold = server.arg("rssi").toInt();
   if (server.hasArg("window"))    presenceWindowSeconds = server.arg("window").toInt();
@@ -3131,39 +3224,39 @@ void handleRadioParams() {
   server.sendHeader("Location", "/");
   server.send(303, "text/plain", "Redirecting...");
 }*/
-void handleRadioParams() {
-  // 1. HARDWARE FREEZE HOOK: Pause background scanner for safe flash writing
-  if (pBLEScan) {
-    pBLEScan->stop();
+  void handleRadioParams() {
+    // 1. HARDWARE FREEZE HOOK: Pause background scanner for safe flash writing
+    if (pBLEScan) {
+      pBLEScan->stop();
+    }
+
+    // 2. Extract values from text box inputs safely
+    if (server.hasArg("rssi")) rssiThreshold = server.arg("rssi").toInt();
+    if (server.hasArg("window")) presenceWindowSeconds = server.arg("window").toInt();
+    if (server.hasArg("scantime")) scanSliceDuration = server.arg("scantime").toInt();
+    if (server.hasArg("absence")) minAbsenceMinutes = server.arg("absence").toInt();
+
+    // 3. LOCK DOWN TO NON-VOLATILE MEMORY (Preferences)
+    prefs.putInt("rssi", rssiThreshold);
+    prefs.putInt("window", presenceWindowSeconds);
+    prefs.putInt("scantime", scanSliceDuration);
+    prefs.putInt("absence", minAbsenceMinutes);  // Saves the setting permanently!
+
+    Serial.println("Parameters secured to NVM storage registers successfully.");
+
+    // 4. HARDWARE UNFREEZE HOOK: Resume scanning with your live values
+    if (pBLEScan) {
+      pBLEScan->clearResults();
+      pBLEScan->start(scanSliceDuration, nullptr, false);
+    }
+
+    // Redirect back to dashboard root instantly
+    server.sendHeader("Location", "/");
+    server.send(303, "text/plain", "Redirecting...");
   }
 
-  // 2. Extract values from text box inputs safely
-  if (server.hasArg("rssi")) rssiThreshold = server.arg("rssi").toInt();
-  if (server.hasArg("window")) presenceWindowSeconds = server.arg("window").toInt();
-  if (server.hasArg("scantime")) scanSliceDuration = server.arg("scantime").toInt();
-  if (server.hasArg("absence")) minAbsenceMinutes = server.arg("absence").toInt();
-
-  // 3. LOCK DOWN TO NON-VOLATILE MEMORY (Preferences)
-  prefs.putInt("rssi", rssiThreshold);
-  prefs.putInt("window", presenceWindowSeconds);
-  prefs.putInt("scantime", scanSliceDuration);
-  prefs.putInt("absence", minAbsenceMinutes);  // Saves the setting permanently!
-
-  Serial.println("Parameters secured to NVM storage registers successfully.");
-
-  // 4. HARDWARE UNFREEZE HOOK: Resume scanning with your live values
-  if (pBLEScan) {
-    pBLEScan->clearResults();
-    pBLEScan->start(scanSliceDuration, nullptr, false);
-  }
-
-  // Redirect back to dashboard root instantly
-  server.sendHeader("Location", "/");
-  server.send(303, "text/plain", "Redirecting...");
-}
-
-// --- UNIFIED NATIVE SECURITY RULE ENGINE ---
-/*
+  // --- UNIFIED NATIVE SECURITY RULE ENGINE ---
+  /*
 void EvaluateSecurityGateState() {
   unsigned long currentMillis = millis();
 
@@ -3262,7 +3355,7 @@ void EvaluateSecurityGateState() {
   }
 }
 */
-/* 
+  /* 
 
 works but token names dont concatemate
 
@@ -3368,7 +3461,7 @@ void EvaluateSecurityGateState() {
 }
 */
 
-/* 
+  /* 
 this incorrectly sets the securitysystemdiable flag 
 void EvaluateSecurityGateState() {
   unsigned long currentMillis = millis();
@@ -3508,85 +3601,85 @@ void EvaluateSecurityGateState() {
 
 */
 
-void EvaluateSecurityGateState() {
-  unsigned long currentMillis = millis();
+  void EvaluateSecurityGateState() {
+    unsigned long currentMillis = millis();
 
-  // ==========================================
-  // RULE 1: CRITICAL FORCE DISABLE OVERRIDE
-  // ==========================================
-  if (currentGateState == GATE_DISABLED) {
-    securitySystemDisableAuthorised = false; 
-    authorisingDeviceNames = "SYSTEM FORCE DISABLED";
-    return;
-  }
+    // ==========================================
+    // RULE 1: CRITICAL FORCE DISABLE OVERRIDE
+    // ==========================================
+    if (currentGateState == GATE_DISABLED) {
+      securitySystemDisableAuthorised = false;
+      authorisingDeviceNames = "SYSTEM FORCE DISABLED";
+      return;
+    }
 
-  // ==========================================
-  // RULE 2: CRITICAL FORCE BYPASS OVERRIDE
-  // ==========================================
-  if (currentGateState == GATE_BYPASS) {
-    securitySystemDisableAuthorised = true;  
-    authorisingDeviceNames = "SYSTEM FORCE BYPASSED";
-    return;
-  }
+    // ==========================================
+    // RULE 2: CRITICAL FORCE BYPASS OVERRIDE
+    // ==========================================
+    if (currentGateState == GATE_BYPASS) {
+      securitySystemDisableAuthorised = true;
+      authorisingDeviceNames = "SYSTEM FORCE BYPASSED";
+      return;
+    }
 
-  // ==========================================
-  // RULE 3: EVALUATE TIMING VALIDATION WINDOWS
-  // ==========================================
-  unsigned long timeElapsedSec = (currentMillis - gateActivationTime) / 1000;
-  bool isArrivalWindowActive = (timeElapsedSec < (unsigned long)voiceGateOpenDurationSeconds);
+    // ==========================================
+    // RULE 3: EVALUATE TIMING VALIDATION WINDOWS
+    // ==========================================
+    unsigned long timeElapsedSec = (currentMillis - gateActivationTime) / 1000;
+    bool isArrivalWindowActive = (timeElapsedSec < (unsigned long)voiceGateOpenDurationSeconds);
 
-  if (isArrivalWindowActive) {
-    // A fresh arrival spike or phone ping has recently triggered the window!
-    String dynamicNameBuilder = "";
-    
-    // Check if a Bluetooth tracker is home and active within your keep-alive window
-    for (int i = 0; i < deviceCount; i++) {
-      if ((currentMillis - discoveredDevices[i].lastSeen) < ((unsigned long)presenceWindowSeconds * 1000)) {
-        for (int k = 0; k < authDeviceCount; k++) {
-          if (authDevices[k].macAddress == discoveredDevices[i].macAddress) {
-            if (dynamicNameBuilder != "") {
-              if (dynamicNameBuilder.indexOf(authDevices[k].friendlyName) == -1) {
-                dynamicNameBuilder += " & " + authDevices[k].friendlyName;
+    if (isArrivalWindowActive) {
+      // A fresh arrival spike or phone ping has recently triggered the window!
+      String dynamicNameBuilder = "";
+
+      // Check if a Bluetooth tracker is home and active within your keep-alive window
+      for (int i = 0; i < deviceCount; i++) {
+        if ((currentMillis - discoveredDevices[i].lastSeen) < ((unsigned long)presenceWindowSeconds * 1000)) {
+          for (int k = 0; k < authDeviceCount; k++) {
+            if (authDevices[k].macAddress == discoveredDevices[i].macAddress) {
+              if (dynamicNameBuilder != "") {
+                if (dynamicNameBuilder.indexOf(authDevices[k].friendlyName) == -1) {
+                  dynamicNameBuilder += " & " + authDevices[k].friendlyName;
+                }
+              } else {
+                dynamicNameBuilder = authDevices[k].friendlyName;
               }
-            } else {
-              dynamicNameBuilder = authDevices[k].friendlyName;
             }
           }
         }
       }
-    }
-    
-    // Append active cellphone string if present
-    if (wifiSmartphoneFriendlyName != "") {
-      if (dynamicNameBuilder != "") {
-        if (dynamicNameBuilder.indexOf(wifiSmartphoneFriendlyName) == -1) {
-          dynamicNameBuilder += " & " + wifiSmartphoneFriendlyName;
+
+      // Append active cellphone string if present
+      if (wifiSmartphoneFriendlyName != "") {
+        if (dynamicNameBuilder != "") {
+          if (dynamicNameBuilder.indexOf(wifiSmartphoneFriendlyName) == -1) {
+            dynamicNameBuilder += " & " + wifiSmartphoneFriendlyName;
+          }
+        } else {
+          dynamicNameBuilder = wifiSmartphoneFriendlyName;
         }
-      } else {
-        dynamicNameBuilder = wifiSmartphoneFriendlyName;
       }
-    }
 
-    // FIXED: If an authorized token or phone is active AND the arrival clock is ticking,
-    // we are officially permitted to flip the high-level security flags to TRUE!
-    if (dynamicNameBuilder != "") {
-      securitySystemDisableAuthorised = true; 
-      authorisingDeviceNames = dynamicNameBuilder;
-      currentGateState = GATE_AUTO_OPEN; // Sync state tracking Enum ID to 1
+      // FIXED: If an authorized token or phone is active AND the arrival clock is ticking,
+      // we are officially permitted to flip the high-level security flags to TRUE!
+      if (dynamicNameBuilder != "") {
+        securitySystemDisableAuthorised = true;
+        authorisingDeviceNames = dynamicNameBuilder;
+        currentGateState = GATE_AUTO_OPEN;  // Sync state tracking Enum ID to 1
+      } else {
+        // No tokens are physically active inside the yard anymore, clear the string safely
+        authorisingDeviceNames = "Scanning...";
+      }
+
     } else {
-      // No tokens are physically active inside the yard anymore, clear the string safely
+      // 🔒 LOCKDOWN SINK: The countdown has run out! Securely drop the flags.
+      // Because it falls out of the timer window, it stays stably shut and can never
+      // force itself back open until a new arrival spike resets the countdown clock!
+      securitySystemDisableAuthorised = false;
       authorisingDeviceNames = "Scanning...";
+      currentGateState = GATE_AUTO_CLOSED;  // Sync state tracking Enum ID to 0
     }
-
-  } else {
-    // 🔒 LOCKDOWN SINK: The countdown has run out! Securely drop the flags.
-    // Because it falls out of the timer window, it stays stably shut and can never 
-    // force itself back open until a new arrival spike resets the countdown clock!
-    securitySystemDisableAuthorised = false; 
-    authorisingDeviceNames = "Scanning...";
-    currentGateState = GATE_AUTO_CLOSED; // Sync state tracking Enum ID to 0
-  }
-/*
+    /*
   // =========================================================================
   // 🔍 PRODUCTION GATE DIAGNOSTIC PRINTER 
   // =========================================================================
@@ -3607,5 +3700,4 @@ void EvaluateSecurityGateState() {
   }
 
   */
-}
-
+  }
