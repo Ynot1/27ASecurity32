@@ -45,7 +45,9 @@ void EvaluateSecurityGateState();
 void SetupWirelessOTA();  // 👈 ADD THIS LINE
 
 //bool wifiSmartphonePresent = false;  // True when any paired 2FA phone is alive on Wi-Fi
+
 String wifiSmartphoneFriendlyName = "";  // Empty string when no cellphones are home
+bool autoLookupEnabled = true;
 
 // Handle non-blocking timing loop for the OTA background processor
 unsigned long lastOtaCheck = 0;
@@ -711,6 +713,111 @@ bool isAuthorisedTokenPresent() {
   return false;
 }
 
+// Full helper function to back up the complete vendor table index structure
+void saveFullVendorCacheToFlash() {
+  prefs.begin("mfg_cache", false);
+  prefs.putInt("count", vendorCacheCount);
+  prefs.putInt("next_slot", nextCacheSlot);
+  
+  for (int i = 0; i < vendorCacheCount; i++) {
+    prefs.putString(("p" + String(i)).c_str(), vendorCache[i].prefix);
+    prefs.putString(("v" + String(i)).c_str(), vendorCache[i].vendorName);
+  }
+  prefs.end();
+  Serial.printf("[NVM CACHE]: Bulk write successful. Committed %d items to Flash.\n", vendorCacheCount);
+}
+
+void saveConfigurationToFlash() {
+  // Open the "security" flash namespace in Read/Write mode (false)
+  prefs.begin("security", false);
+
+  // BACK UP STATE INTERNALLY: Lock the override state mode down permanently
+  prefs.putInt("gstm", (int)currentGateState);
+
+  // 1. Commit stand-alone configuration adjustments
+  prefs.putInt("rssiGate", rssiThreshold);
+  prefs.putInt("presenceSec", presenceWindowSeconds);
+  prefs.putInt("scanTimeSec", scanSliceDuration);
+  prefs.putInt("authWindow", authTimeWindowSeconds);
+  prefs.putInt("arrivalLimit", maxArrivalAgeSeconds);
+  prefs.putInt("pingInterval", networkPingIntervalSeconds);
+  prefs.putInt("gateDuration", voiceGateOpenDurationSeconds);
+  prefs.putInt("absence", minAbsenceMinutes);
+  
+  // 👈 NEW: Secure the Auto-Lookup toggle button switch state
+  prefs.putBool("autoLk", autoLookupEnabled);
+
+  // 2. Commit tracking counter totals
+  prefs.putInt("btCount", authDeviceCount);
+  prefs.putInt("ipCount", authIPCount);
+
+  // 3. Commit authorized Bluetooth structural items
+  for (int i = 0; i < authDeviceCount; i++) {
+    prefs.putString(("btMac" + String(i)).c_str(), authDevices[i].macAddress);
+    prefs.putString(("btType" + String(i)).c_str(), authDevices[i].deviceType);
+    prefs.putString(("btName" + String(i)).c_str(), authDevices[i].friendlyName);
+  }
+
+  // 4. Commit authorized iPhone network configurations
+  for (int i = 0; i < authIPCount; i++) {
+    prefs.putUChar(("ipQuad" + String(i)).c_str(), authIPs[i].lastQuad);
+    prefs.putString(("ipName" + String(i)).c_str(), authIPs[i].friendlyName);
+  }
+
+  prefs.end();  // Lock and close the storage container safely
+  Serial.println("💾 SUCCESS: All user configurations backed up to Non-Volatile Flash.");
+}
+
+void loadConfigurationFromFlash() {
+  // Open the "security" flash namespace in Read-Only mode (true)
+  prefs.begin("security", true);
+
+  // RESTORE OVERRIDE STATE ON BOOT: Default to GATE_AUTO_CLOSED (0) if flash is empty
+  int savedStateMode = prefs.getInt("gstm", 0);
+  currentGateState = (GateStateMode)savedStateMode;
+
+  // 1. Load parameters, defaulting to your current values if flash is empty
+  rssiThreshold = prefs.getInt("rssiGate", -90);
+  presenceWindowSeconds = prefs.getInt("presenceSec", 60);
+  scanSliceDuration = prefs.getInt("scanTimeSec", 3);
+  authTimeWindowSeconds = prefs.getInt("authWindow", 30);
+  maxArrivalAgeSeconds = prefs.getInt("arrivalLimit", 300);
+  networkPingIntervalSeconds = prefs.getInt("pingInterval", 2);
+  voiceGateOpenDurationSeconds = prefs.getInt("gateDuration", 60);
+  minAbsenceMinutes = prefs.getInt("absence", 10);
+  
+  // 👈 NEW: Restore the Auto-Lookup toggle state on system boot (Defaults to true)
+  autoLookupEnabled = prefs.getBool("autoLk", true);
+
+  // 2. Load total database counts
+  authDeviceCount = prefs.getInt("btCount", 0);
+  authIPCount = prefs.getInt("ipCount", 0);
+
+  // 3. Rebuild Authorized Bluetooth storage slots
+  for (int i = 0; i < authDeviceCount; i++) {
+    authDevices[i].macAddress = prefs.getString(("btMac" + String(i)).c_str(), "");
+    authDevices[i].deviceType = prefs.getString(("btType" + String(i)).c_str(), "");
+    authDevices[i].friendlyName = prefs.getString(("btName" + String(i)).c_str(), "");
+    authDevices[i].hasTrippedGate = false;  // Fresh initialization setup
+  }
+
+  // 4. Rebuild Authorized IP Network targets
+  for (int i = 0; i < authIPCount; i++) {
+    authIPs[i].lastQuad = prefs.getUChar(("ipQuad" + String(i)).c_str(), 0);
+    authIPs[i].friendlyName = prefs.getString(("ipName" + String(i)).c_str(), "");
+    authIPs[i].isOnline = false;
+    authIPs[i].hasTrippedGate = false;
+    authIPs[i].firstSeen = 0;
+    authIPs[i].lastSeen = 0;
+  }
+
+  prefs.end();
+  Serial.println("🔄 SUCCESS: Authorization databases recovered from onboard Flash.");
+}
+
+/*
+
+prior to adding manual MAC entry
 void saveConfigurationToFlash() {
   // Open the "security" flash namespace in Read/Write mode (false)
   prefs.begin("security", false);
@@ -792,7 +899,7 @@ void loadConfigurationFromFlash() {
   prefs.end();
   Serial.println("🔄 SUCCESS: Authorization databases recovered from onboard Flash.");
 }
-
+*/
 void loadVendorCache() {
   prefs.begin("mfg_cache", true);  // Open separate isolated namespace as read-only
   vendorCacheCount = prefs.getInt("count", 0);
@@ -1322,6 +1429,8 @@ void setup() {
       }
     }
 
+
+
     server.sendHeader("Location", "/");
     server.send(303);
   });
@@ -1336,6 +1445,9 @@ void setup() {
     Serial.println("\n[WEB TEST]: Manually queued prefix 98:B6:E9 into background worker queue...");
     server.send(200, "text/plain", "OUI Prefix 98:B6:E9 Pushed Into Background Queue!");
   });
+
+   // 👈 ADD THIS LINE HERE TO REGISTER THE NEW ROUTES:
+  setupMacLookupWebRoutes(); 
 
   server.begin();  // Always near the end of setup()
   //Serial.println(F("HTTP Web Server Started!"));
@@ -1362,6 +1474,178 @@ void setup() {
 
 }  // end of void setup
 
+void setupMacLookupWebRoutes() {
+
+    // Route 1: Toggle button handler
+    server.on("/toggle-lookup", HTTP_POST, []() {
+        autoLookupEnabled = !autoLookupEnabled;
+        
+        // 👉 FIX: Call your existing master function to save the toggle state along with everything else
+        saveConfigurationToFlash(); 
+        
+        server.send(200, "text/plain", autoLookupEnabled ? "1" : "0");
+    });
+
+    // Route 2: Receive manual HTML form POST, check table updates, write changes
+    server.on("/manual-mac", HTTP_POST, []() {
+        if (!server.hasArg("oui") || !server.hasArg("vendor")) {
+            server.send(400, "text/plain", "Error: Missing input fields.");
+            return;
+        }
+
+        String inputOui = server.arg("oui");
+        String inputVendor = server.arg("vendor");
+
+        inputOui.trim();
+        inputOui.toUpperCase();
+        inputVendor.trim();
+
+        if (inputOui.length() < 8 || inputVendor.length() == 0) {
+            server.send(400, "text/plain", "Error: Invalid data format.");
+            return;
+        }
+
+        String cleanOui = inputOui.substring(0, 8);
+        bool matchFound = false;
+        int targetSlot = -1;
+
+        // Search current lookup table for existing 3-byte OUI match and replace
+        for (int i = 0; i < vendorCacheCount; i++) {
+            if (strcmp(vendorCache[i].prefix, cleanOui.c_str()) == 0) {
+                strncpy(vendorCache[i].vendorName, inputVendor.c_str(), sizeof(vendorCache[i].vendorName) - 1);
+                vendorCache[i].vendorName[sizeof(vendorCache[i].vendorName) - 1] = '\0';
+                
+                matchFound = true;
+                targetSlot = i; 
+                break;
+            }
+        }
+
+        // If no duplicate prefix existed, build a new record block
+        if (!matchFound) {
+            if (vendorCacheCount < MAX_CACHED_VENDORS) {
+                targetSlot = vendorCacheCount;
+                strncpy(vendorCache[targetSlot].prefix, cleanOui.c_str(), sizeof(vendorCache[targetSlot].prefix) - 1);
+                vendorCache[targetSlot].prefix[sizeof(vendorCache[targetSlot].prefix) - 1] = '\0';
+                
+                strncpy(vendorCache[targetSlot].vendorName, inputVendor.c_str(), sizeof(vendorCache[targetSlot].vendorName) - 1);
+                vendorCache[targetSlot].vendorName[sizeof(vendorCache[targetSlot].vendorName) - 1] = '\0';
+                
+                vendorCacheCount++;
+                nextCacheSlot = vendorCacheCount % MAX_CACHED_VENDORS;
+            } else {
+                targetSlot = nextCacheSlot;
+                strncpy(vendorCache[targetSlot].prefix, cleanOui.c_str(), sizeof(vendorCache[targetSlot].prefix) - 1);
+                vendorCache[targetSlot].prefix[sizeof(vendorCache[targetSlot].prefix) - 1] = '\0';
+                
+                strncpy(vendorCache[targetSlot].vendorName, inputVendor.c_str(), sizeof(vendorCache[targetSlot].vendorName) - 1);
+                vendorCache[targetSlot].vendorName[sizeof(vendorCache[targetSlot].vendorName) - 1] = '\0';
+                
+                nextCacheSlot = (nextCacheSlot + 1) % MAX_CACHED_VENDORS;
+            }
+            saveFullVendorCacheToFlash();
+        } else {
+            saveVendorToCacheFlash(targetSlot);
+        }
+
+        // 👉 FIX: Loop through active live tracking tables and dynamically swap match strings
+        // This makes your new text show up immediately without waiting for a re-scan!
+        for (int x = 0; x < deviceCount; x++) {
+            String currentMac = discoveredDevices[x].macAddress;
+            currentMac.toUpperCase();
+            
+            if (currentMac.substring(0, 8) == cleanOui) {
+                // If it's a paired token, don't overwrite its friendly name
+                bool isPairedToken = false;
+                for (int k = 0; k < authDeviceCount; k++) {
+                    String authMac = authDevices[k].macAddress;
+                    authMac.toUpperCase();
+                    if (authMac == currentMac) {
+                        isPairedToken = true;
+                        break;
+                    }
+                }
+                
+                // If it's a standard ambient device, update its display name immediately
+                if (!isPairedToken) {
+                    discoveredDevices[x].deviceType = inputVendor;
+                }
+            }
+        }
+
+        server.send(200, "text/plain", "OK");
+    });
+}
+
+void ProcessBackgroundVendorLookup() {
+  // Throttled gate execution: evaluate this process once every 6 seconds
+  static unsigned long lastLookupCheckTime = 0;
+  if (millis() - lastLookupCheckTime < 6000) return;
+  lastLookupCheckTime = millis();
+
+  // 👈 NEW REQUIREMENT CHECK: If the user disabled auto lookup via the web page, 
+  // clear out any pending background tasks instantly and drop out of the routine.
+  if (!autoLookupEnabled) {
+    if (pendingMacPrefix != "") {
+      Serial.printf("[BACKGROUND WORKER]: Auto lookup is DISABLED. Flushing queued request for: %s\n", pendingMacPrefix.c_str());
+      pendingMacPrefix = ""; // Clear request immediately to keep queue unblocked
+    }
+    return; // Drop out instantly
+  }
+
+  // THREAD-SAFE GATING: Check our local flag instead of hitting the raw Bluetooth hardware object
+  if (pendingMacPrefix != "" && WiFi.status() == WL_CONNECTED) {
+
+    // If the scanner is currently running, turn it off cleanly using the proper task command
+    if (isBluetoothRadioBusy && pBLEScan != nullptr) {
+      Serial.println("[BACKGROUND WORKER]: Pausing Bluetooth scan safely to clear an HTTPS window...");
+      pBLEScan->stop();
+      isBluetoothRadioBusy = false;
+      vTaskDelay(pdMS_TO_TICKS(100));  // Give NimBLE 100ms to completely settle its memory stack
+    }
+
+    Serial.println("\n--- [BACKGROUND WORKER]: NEW TRANSACTION RETRIEVED ---");
+    Serial.printf("  Target OUI Prefix to Resolve: %s\n", pendingMacPrefix.c_str());
+
+    String currentPrefix = pendingMacPrefix;
+    pendingMacPrefix = "";  // Clear immediately to release the queue lock
+
+    String parsedVendor = FetchVendorFromAPI(currentPrefix);
+
+    if (parsedVendor == "Unknown Brand" || parsedVendor == "Searching...") {
+      parsedVendor = "Unknown Device";
+    }
+
+    // --- Safe Memory Buffer Writing ---
+    int targetSlot = nextCacheSlot;
+    if (targetSlot >= 0 && targetSlot < MAX_CACHED_VENDORS) {
+      memset(vendorCache[targetSlot].prefix, 0, sizeof(vendorCache[targetSlot].prefix));
+      strncpy(vendorCache[targetSlot].prefix, currentPrefix.c_str(), 8);
+
+      memset(vendorCache[targetSlot].vendorName, 0, sizeof(vendorCache[targetSlot].vendorName));
+      strncpy(vendorCache[targetSlot].vendorName, parsedVendor.c_str(), 30);
+
+      if (vendorCacheCount < MAX_CACHED_VENDORS) vendorCacheCount++;
+
+      nextCacheSlot++;
+      if (nextCacheSlot >= MAX_CACHED_VENDORS) nextCacheSlot = 0;
+
+      // The diagnostic return is gone! Flash saving is fully reactivated safely
+      saveVendorToCacheFlash(targetSlot);
+      Serial.printf("  Result Committed to Storage : %s -> %s\n", currentPrefix.c_str(), parsedVendor.c_str());
+    }
+
+    // RESUME BLUETOOTH WALKS: Turn the radio back on for your security filters
+    if (pBLEScan != nullptr) {
+      Serial.println("[BACKGROUND WORKER]: Lookup finished. Resuming active Bluetooth scan windows.");
+      isBluetoothRadioBusy = true;
+      pBLEScan->start(3, false);
+    }
+    Serial.println("------------------------------------------------------");
+  }
+}
+/*
+prior to adding manual MAC entry
 void ProcessBackgroundVendorLookup() {
   // Throttled gate execution: evaluate this process once every 6 seconds
   static unsigned long lastLookupCheckTime = 0;
@@ -1419,6 +1703,7 @@ void ProcessBackgroundVendorLookup() {
     Serial.println("------------------------------------------------------");
   }
 }
+*/
 /*
 
 some debug went on in here, might need this later
@@ -2307,6 +2592,138 @@ here to copy freeze hook structure
   }
   html += "</table>";
 
+// new Web form for manual mac entry
+
+ // ============================================================================
+  // C++ HTML STRING CONCATENATION (Centered, Stable & Integrated with SessionStorage)
+  // ============================================================================
+
+  // 1. Control Panel Layout for Bluetooth MAC Lookup Settings (Centered Wrapper)
+  html += "<div class='config-section' style='margin: 0 auto 30px auto; padding: 15px; border: 1px solid #444; border-radius: 6px; background-color: #fcfcfc; width: 95%; max-width: 700px; text-align: center;'>";
+  html += "<h3 style='margin-top: 0;'>Bluetooth MAC Lookup Settings</h3>";
+  
+  // 👉 FIXED FLICKERING: Pull state natively inline on render instead of hitting a background fetch loop
+  if (autoLookupEnabled) {
+      html += "<p>Automatic OUI Lookup Service: <strong id='lookup-status' style='color: darkgreen;'>Enabled</strong></p>";
+      html += "<button id='toggle-lookup-btn' onclick='toggleAutoLookup()' style='padding: 6px 12px; cursor: pointer;'>Stop Auto Lookup</button>";
+  } else {
+      html += "<p>Automatic OUI Lookup Service: <strong id='lookup-status' style='color: darkred;'>Disabled</strong></p>";
+      html += "<button id='toggle-lookup-btn' onclick='toggleAutoLookup()' style='padding: 6px 12px; cursor: pointer;'>Start Auto Lookup</button>";
+  }
+  html += "</div>";
+
+  // 2. Input Form Layout Container formatted as a Centered Table to match your layout
+  html += "<div class='config-section' style='margin: 0 auto 30px auto; width: 95%; max-width: 700px;'>";
+  html += "<h3 style='text-align: center;'>Manual Manufacturer OUI Override Registry</h3>";
+  
+  // 👉 FIXED REFRESH OVERWRITE: Setting session tracking tag true on form submission
+  html += "<form id='manual-mac-form' onsubmit=\"sessionStorage.setItem('typing', 'true'); submitManualMac(event);\">";
+  html += "<table border='1' align='center' style='width: 100%; border-collapse: collapse; background-color: #fcfcfc;'>";
+  
+  // Row 1: MAC / OUI Prefix Input Field
+  html += "<tr>";
+  html += "<td style='padding: 10px; font-weight: bold; width: 30%; text-align: right;'>MAC or OUI Prefix:</td>";
+  html += "<td style='padding: 10px; width: 70%; text-align: left;'>";
+  // 👉 FIXED: Locks auto-refresh instantly using your project's native sessionStorage strategy on focus
+  html += "<input type='text' id='mac-address' name='mac' placeholder='AA:BB:CC or Full MAC Address' required ";
+  html += "pattern='^([0-9A-Fa-f]{2}[:-]?){2}([0-9A-Fa-f]{2})([:-][0-9A-Fa-f]{2}){0,3}$' style='padding: 4px; width: 85%; max-width: 300px;' ";
+  html += "onfocus=\"sessionStorage.setItem('typing', 'true');\" onblur=\"sessionStorage.removeItem('typing');\">";
+  html += "</td>";
+  html += "</tr>";
+
+  // Row 2: Manufacturer Title Input Field
+  html += "<tr>";
+  html += "<td style='padding: 10px; font-weight: bold; text-align: right;'>Manufacturer Title:</td>";
+  html += "<td style='padding: 10px; text-align: left;'>";
+  // 👉 FIXED: Locks auto-refresh instantly using your project's native sessionStorage strategy on focus
+  html += "<input type='text' id='vendor-name' name='vendor' placeholder='e.g., Tile Inc., Apple' required maxlength='31' style='padding: 4px; width: 85%; max-width: 300px;' ";
+  html += "onfocus=\"sessionStorage.setItem('typing', 'true');\" onblur=\"sessionStorage.removeItem('typing');\">";
+  html += "</td>";
+  html += "</tr>";
+
+  // Row 3: Action Submission Button
+  html += "<tr>";
+  html += "<td colspan='2' style='padding: 12px; text-align: center;'>";
+  html += "<button type='submit' style='padding: 8px 20px; background-color: #007bff; color: white; border: none; border-radius: 4px; cursor: pointer; font-weight: bold;'>Commit & Write to Flash</button>";
+  html += "</td>";
+  html += "</tr>";
+  
+  html += "</table>";
+  html += "</form>";
+  html += "</div>";
+
+  // 3. JavaScript Event Drivers (Embedded directly inside the web interface output)
+  html += "<script>";
+  html += "function setPageFreeze(freeze) {";
+  html += "  if (freeze) {";
+  html += "    document.body.style.pointerEvents = 'none';";
+  html += "    document.body.style.opacity = '0.5';";
+  html += "  } else {";
+  html += "    document.body.style.pointerEvents = 'auto';";
+  html += "    document.body.style.opacity = '1.0';";
+  html += "  }";
+  html += "}";
+
+  html += "function toggleAutoLookup() {";
+  html += "  setPageFreeze(true);";
+  html += "  fetch('/toggle-lookup', { method: 'POST' })";
+  html += "  .then(response => response.text())";
+  html += "  .then(text => {";
+  html += "    const btn = document.getElementById('toggle-lookup-btn');";
+  html += "    const status = document.getElementById('lookup-status');";
+  html += "    if (text === '1') {";
+  html += "      btn.innerText = 'Stop Auto Lookup';";
+  html += "      status.innerText = 'Enabled';";
+  html += "      status.style.color = 'darkgreen';";
+  html += "    } else {";
+  html += "      btn.innerText = 'Start Auto Lookup';";
+  html += "      status.innerText = 'Disabled';";
+  html += "      status.style.color = 'darkred';";
+  html += "    }";
+  html += "  })";
+  html += "  .catch(err => alert('Network error processing toggle state request.'))";
+  html += "  .finally(() => setPageFreeze(false));";
+  html += "}";
+
+  html += "function submitManualMac(event) {";
+  html += "  event.preventDefault();";
+  html += "  setPageFreeze(true);";
+  html += "  let rawMac = document.getElementById('mac-address').value.trim();";
+  html += "  const vendor = document.getElementById('vendor-name').value.trim();";
+  html += "  rawMac = rawMac.replace(/-/g, ':').toUpperCase();";
+  html += "  const ouiPrefix = rawMac.substring(0, 8);";
+  html += "  if (ouiPrefix.length < 8 || ouiPrefix.split(':').length !== 3) {";
+  html += "    alert('Invalid entry layout format. Please provide a standard MAC profile.');";
+  html += "    sessionStorage.removeItem('typing');"; // Release session lock
+  html += "    setPageFreeze(false);";
+  html += "    return;";
+  html += "  }";
+  html += "  const formData = new URLSearchParams();";
+  html += "  formData.append('oui', ouiPrefix);";
+  html += "  formData.append('vendor', vendor);";
+  html += "  fetch('/manual-mac', {";
+  html += "    method: 'POST',";
+  html += "    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },";
+  html += "    body: formData";
+  html += "  })";
+  html += "  .then(response => response.text())";
+  html += "  .then(text => {";
+  html += "    if (text === 'OK') {";
+  html += "      alert('Success: Database matched entry table records and committed fields directly into Flash.');";
+  html += "      document.getElementById('manual-mac-form').reset();";
+  html += "    } else {";
+  html += "      alert('Server error: ' + text);";
+  html += "    }";
+  html += "  })";
+  html += "  .catch(err => alert('Network submission delivery failure encountered.'))";
+  html += "  .finally(() => {";
+  html += "    sessionStorage.removeItem('typing');"; // Release session refresh lock cleanly
+  html += "    setPageFreeze(false);";
+  html += "  });";
+  html += "}";
+  html += "</script>";
+
+// new Web form for manual mac entry
   // ======================================================
   // UPDATED: SETTINGS CONFIGURATION FORM (FREEZE-SAFE OVERRIDES)
   // ======================================================
