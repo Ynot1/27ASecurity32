@@ -542,12 +542,14 @@ class MyAdvertisedDeviceCallbacks : public BLEAdvertisedDeviceCallbacks {
           // --- THE SECURITY ACCESS TRIGGER GOES HERE ---
           Serial.println("\n[SECURITY TRIPPED]: Authorized device has returned after a full absence period!");
           Serial.printf("Device verified out of bounds for %lu minutes. ARRIVAL CHANNELS VALIDATED.\n", (missingTimeMs / 60000));
-
+/*
           ProxyRequestText = "Authorized device has returned";
-          ProxyPost();
+         RotateProxyLogArray();
+    }
           ProxyRequestText = "Device verified out of bounds for %lu minutes";
-          ProxyPost();
-
+          RotateProxyLogArray();
+    }
+*/
 
           // Execute your actual Alexa Gate opener flag execution paths right here!
           // e.g., alexaGateTimerStart = millis(); gateAuthorised = true;
@@ -988,7 +990,9 @@ Onboard relay2 = Panic Input or outside siren
 byte VBNumber = 40;          // 40 is the watchdog post value for the 27A Security Interface
 String VBNumberString = "";  // also need a string as leading zero needed for later string matching accuracy
 
-const char* WatchDogHost = "192.168.1.60";  // ip address of the watchdog esp8266
+const char* WatchDogHost = "192.168.1.60";  // ip address of the watchdog esp8266 at 27A
+
+//const char* WatchDogHost = "192.168.20.60";  // ip address of the watchdog esp8266 at dougs place
 
 long WatchDogCounterLoopThreshold = 200;  // value of 30 is about 5secs. 200 is about 20 sec
 long WatchDogLoopCounter = 0;
@@ -1798,7 +1802,7 @@ void loop() {
       VBNumber = 02;  // 27a Security Set code
       VBNumberString = "02";
       ProxyPost();
-      ProxyRequestText = "Alarm is Set";
+      ProxyRequestText = "27A Alarm is Set";
       RotateProxyLogArray();
     }
   }
@@ -1808,9 +1812,9 @@ void loop() {
     if (PrevSec27ASetState == LOW) {
       //Serial.println("27a security has just entered Unset State ");
       VBNumber = 03;  // 27a Security Unset code
-      VBNumberString = "03";
+      VBNumberString = ("03 " + authorisingDeviceNames);
       ProxyPost();
-      ProxyRequestText = "Alarm is UnSet";
+      ProxyRequestText = "27A Alarm is UnSet";
       RotateProxyLogArray();
     }
   }
@@ -2730,6 +2734,7 @@ here to copy freeze hook structure
   html += "<div style='margin: 20px auto; width: 95%; max-width: 700px; text-align: center; border: 1px dashed #666; padding: 15px; background-color: #fff;'>";
   //html += "<form action='/save-settings' method='POST'>"; I think this should be GET
   html += "<form action='/save-settings' method='GET'>";  // I think this should be GET
+    html += "<h3 style='margin-top: 0;'>Ping Device Settings</h3>";
 
   // 1. ACTIVE PRESENCE FIELD
   html += "<div style='display: inline-block; margin: 5px 10px;'><b>Active Presence: </b>"
@@ -3068,6 +3073,11 @@ bool Sec27AUnsetOn() {
     } else {  // if (securitySystemDisableAuthorised == true)
       Serial.println("    [DENIED]: Request blocked because securitySystemDisableAuthorised is FALSE.");
       Serial.println("27A Security UnSet Request NOT Honored - No Auth keys found");
+
+      VBNumber = 04;  // 27a Unset Command without auth keys present
+      VBNumberString = "04";
+      ProxyPost();
+
       ProxyRequestText = "UnSet Request NOT Honored - No Auth keys found";
       RotateProxyLogArray();
     }
@@ -3201,7 +3211,7 @@ void ProxyPost() {
 
   // 2 is Burglar Alarm has Seted
   // 3 is Burglar Alarm is Unset
-  // 4 is Burglar Alarm Sounding
+  // 4 is Burglar Alarm Unset command requested without Auth keys present
   //Serial.print("Requesting POST to Proxy ");
   //Serial.println(VBNumberString);
 
