@@ -1,24 +1,6 @@
 // This AI Thread https://www.google.com/search?q=i+was+working+with+you+in+another+thread+on+ardiono+coding%2C+now+all+i+get+is+%22Something+went+wrong+and+the+content+wasn%27t+generated.%22&sourceid=chrome&ie=UTF-8&aep=82&amc=1&csuir=1&gs_lcrp=EgZjaHJvbWUqDwgAECMYJxjqAhjwBRieBjIPCAAQIxgnGOoCGPAFGJ4GMg8IARAjGCcY6gIY8AUYngYyDwgCECMYJxjqAhjwBRieBjIPCAMQIxgnGOoCGPAFGJ4GMg8IBBAjGCcY6gIY8AUYngYyFQgFEAAYQhi0AhjqAhjwBRieBhj2BtIBCTU3ODBqMGozM6gCBrACAQ&mstk=AUtExfAd1MCTYmiWxNeYIXFe0P49UfCAt9JxG0ZUkpTYQhznEifY3f-268gD2vUcUBQwmm2l_sUHVcOKK2vNz9RhUj33So-vbmGMfCzWobuf41R6-QtVOckTGclcLsns-0tV3eVZTTIPjAWXq3nbFAWZ5QZFYYdGboLqrF-cSRyTbenHcgJ9qrKP7dWD5tS2hzfXkI6ewgCVoJShKATYgPR6BlunJ5oZ1ukkjFgqR_Db19NffipgEFUqi-x-yDkCQuLwB8OSrAP4usUQP2k1bbOtEJ8R-GLkQjmG-VPEMLo4SvSqgvs3weskrzUXkTX5K0Z1XEXFqro3j5rzdg&oq=&cud=0&source=chrome.crn.obic&mtid=VvNOapCMK5Ky4-EPrNGLYQ&lns_mode=cvst&udm=50
 
 
-/*
-
-  // ==========================================
-  //  SORT DEVICES BY RSSI (Strongest First)
-  // ==========================================
-  for (int i = 0; i < deviceCount - 1; i++) {
-    for (int j = 0; j < deviceCount - i - 1; j++) {
-      // If the next device has a stronger/higher RSSI, swap them
-      if (discoveredDevices[j].rssi < discoveredDevices[j + 1].rssi) {
-        auto temp = discoveredDevices[j];
-        discoveredDevices[j] = discoveredDevices[j + 1];
-        discoveredDevices[j + 1] = temp;
-      }
-    }
-  }
-
-  */
-
 #include <WiFi.h>
 #include <WebServer.h>
 #include <WiFiUdp.h>
@@ -37,7 +19,7 @@ Preferences prefs;  // Instantiate the permanent storage core instance
 
 #include <HTTPClient.h>
 //#include <WiFiClientSecure.h>  // Required for handling secure HTTPS api endpoints
-#include <WiFiClient.h>  // 
+#include <WiFiClient.h>  //
 
 // Function Prototype: Declares the gate signature upfront so the compiler recognizes it anywhere
 void EvaluateSecurityGateState();
@@ -152,8 +134,11 @@ volatile bool isBluetoothRadioBusy = false;  // 👈 Thread-safe hardware monito
 // Global settings configurations
 int authTimeWindowSeconds = 30;
 int maxArrivalAgeSeconds = 300;
-unsigned long lastPingTime = 0;      // Tracks non-blocking network thread cycles
-int networkPingIntervalSeconds = 2;  // 👈 NEW: User-adjustable ping delay (Default: 2s)
+unsigned long lastPingTime = 0;                 // Tracks non-blocking network thread cycles
+int networkPingIntervalSeconds = 2;             // 👈 NEW: User-adjustable ping delay (Default: 2s)
+const unsigned long warningWinkInterval = 100;  // Blink rapidly every 100ms
+unsigned long previousWinkMillis = 0;
+bool ledWinkState = LOW;
 
 // ****** GLOBAL FUNCTIONS & Classes
 /*
@@ -359,33 +344,33 @@ String FetchVendorFromAPI(String prefix) {
     return "Unknown Brand";
   }
 
-  WiFiClient client; 
+  WiFiClient client;
   HTTPClient http;
 
   // Use a completely unencrypted layout that doesn't trigger 301 redirections
-  //String url = "http://api/macvendors.co/vendor/" + prefix; 
+  //String url = "http://api/macvendors.co/vendor/" + prefix;
 
-// browsing http://api.maclookup.app/v2/macs/98:b6:e9/company/name gets Nintendo Co.,Ltd
-String url = "http://api.maclookup.app/v2/macs/"+ prefix + "/company/name"; 
+  // browsing http://api.maclookup.app/v2/macs/98:b6:e9/company/name gets Nintendo Co.,Ltd
+  String url = "http://api.maclookup.app/v2/macs/" + prefix + "/company/name";
   url.toLowerCase();
 
   Serial.print("[API DIAGNOSTIC]: Issuing LOW-OVERHEAD HTTP request to -> ");
   Serial.println(url);
-  
-  if (http.begin(client, url)) { 
-    http.setTimeout(2500); 
+
+  if (http.begin(client, url)) {
+    http.setTimeout(2500);
     int httpCode = http.GET();
-    
+
     String result = "Unknown Brand";
-    
+
     if (httpCode == HTTP_CODE_OK) {
       result = http.getString();
       result.trim();
-      
+
       if (result.length() > 0 && result.indexOf("Not Found") == -1 && result.indexOf("Invalid") == -1) {
         Serial.print("[API DIAGNOSTIC]: Success! Raw vendor string: ");
         Serial.println(result);
-        
+
         // Clean corporate punctuation artifacts out of database table records
         result.replace(",Ltd", "");
         result.replace(", Ltd", "");
@@ -394,9 +379,9 @@ String url = "http://api.maclookup.app/v2/macs/"+ prefix + "/company/name";
         result.replace(".,", " ");
         result.replace(",", " ");
         result.replace(".", " ");
-        result.replace("  ", " "); 
+        result.replace("  ", " ");
         result.trim();
-        
+
         // Compact formatting filter for common tech giants
         if (result.indexOf("Samsung") != -1) result = "Samsung Device";
         else if (result.indexOf("Apple") != -1) result = "Apple Device";
@@ -406,7 +391,7 @@ String url = "http://api.maclookup.app/v2/macs/"+ prefix + "/company/name";
         else if (result.indexOf("Intel") != -1) result = "Intel Device";
         else if (result.indexOf("Huawei") != -1) result = "Huawei Device";
         else if (result.indexOf("Google") != -1) result = "Google Device";
-        
+
         if (result.length() > 30) result = result.substring(0, 30);
       } else {
         Serial.println("[API DIAGNOSTIC]: Device prefix not found in remote database.");
@@ -414,8 +399,8 @@ String url = "http://api.maclookup.app/v2/macs/"+ prefix + "/company/name";
     } else {
       Serial.printf("[API DIAGNOSTIC]: Transport failed! HTTP Error Code: %d\n", httpCode);
     }
-    
-    http.end(); 
+
+    http.end();
     return result;
   } else {
     Serial.println("[API DIAGNOSTIC]: Failed to open connection channel.");
@@ -542,7 +527,7 @@ class MyAdvertisedDeviceCallbacks : public BLEAdvertisedDeviceCallbacks {
           // --- THE SECURITY ACCESS TRIGGER GOES HERE ---
           Serial.println("\n[SECURITY TRIPPED]: Authorized device has returned after a full absence period!");
           Serial.printf("Device verified out of bounds for %lu minutes. ARRIVAL CHANNELS VALIDATED.\n", (missingTimeMs / 60000));
-/*
+          /*
           ProxyRequestText = "Authorized device has returned";
          RotateProxyLogArray();
     }
@@ -720,7 +705,7 @@ void saveFullVendorCacheToFlash() {
   prefs.begin("mfg_cache", false);
   prefs.putInt("count", vendorCacheCount);
   prefs.putInt("next_slot", nextCacheSlot);
-  
+
   for (int i = 0; i < vendorCacheCount; i++) {
     prefs.putString(("p" + String(i)).c_str(), vendorCache[i].prefix);
     prefs.putString(("v" + String(i)).c_str(), vendorCache[i].vendorName);
@@ -745,7 +730,7 @@ void saveConfigurationToFlash() {
   prefs.putInt("pingInterval", networkPingIntervalSeconds);
   prefs.putInt("gateDuration", voiceGateOpenDurationSeconds);
   prefs.putInt("absence", minAbsenceMinutes);
-  
+
   // 👈 NEW: Secure the Auto-Lookup toggle button switch state
   prefs.putBool("autoLk", autoLookupEnabled);
 
@@ -787,7 +772,7 @@ void loadConfigurationFromFlash() {
   networkPingIntervalSeconds = prefs.getInt("pingInterval", 2);
   voiceGateOpenDurationSeconds = prefs.getInt("gateDuration", 60);
   minAbsenceMinutes = prefs.getInt("absence", 10);
-  
+
   // 👈 NEW: Restore the Auto-Lookup toggle state on system boot (Defaults to true)
   autoLookupEnabled = prefs.getBool("autoLk", true);
 
@@ -937,7 +922,7 @@ void saveVendorToCacheFlash(int index) {
 
 // original security system interface code  here
 
-boolean connectWifi();  // router handed out 192.168.1.169 for this initially at 27A
+boolean connectWifi();  // router handed out 192.168.1.169 for this initially at 27A. 2nd unit at .170
 
 //on/off callbacks
 bool Sec27ASetOn();
@@ -949,11 +934,11 @@ bool Sec27APanicOff();
 bool AlarmSetLockout = LOW;  // HIGH is lockout state
 
 // Change this before you flash
-//const char* ssid = "SmartStuff";
-//const char* password = "Password123456";
+const char* ssid = "SmartStuff";
+const char* password = "Password123456";
 
-const char* ssid = "Inspire Net 2.4G";
-const char* password = "cexekocura";
+//const char* ssid = "Inspire Net 2.4G";
+//const char* password = "cexekocura";
 
 boolean wifiConnected = false;
 
@@ -974,8 +959,11 @@ bool PrevSec27ASoundingState = LOW;
 //const int SetUnsetInputPin = 0;  // SetUnsetInputPin pin on ESP-01
 const int SetUnsetInputPin = 9;  // SetUnsetInputPin pin on ESP32 -C3 - The BOOT button
 //const int LedPin = 2;             // GPIO2 pin. used as LED Driver on ESP-01 / 8266
-const int LedPin = 8;                 //  used as LED Driver on an ESP32-C3
+//const int LedPin = 8;  //  used as LED Driver on an ESP32-C3
+const int LedPin = 23;      // LEDPoin on the LC tech 2 relay board
 const int AlarmSoundingInputPin = 3;  //
+const int Relay1Pin = 16;             //
+const int Relay2Pin = 17;             //
 /*
 IO for an ESP-01 setup on a dual relay board
 GPIO0 - Alarm Panel Set/Unset input
@@ -1037,10 +1025,10 @@ int AlarmSetLockoutCounter;
 int AlarmSetLockoutCounterThreshold = 30;
 
 // Set your Static IP address
-//IPAddress local_IP(192, 168, 1, 169);  // fixed IP address for the 27A Security Interface (this code) at 27A
-//IPAddress gateway(192, 168, 1, 1);
-IPAddress local_IP(192, 168, 20, 20);  // fixed IP address for the 27A Security Interface (this code) at Dougs place
-IPAddress gateway(192, 168, 20, 1);
+IPAddress local_IP(192, 168, 1, 171);  // fixed IP address for the new 27A Security Interface (this code) at 27A
+IPAddress gateway(192, 168, 1, 1);
+//IPAddress local_IP(192, 168, 20, 20);  // fixed IP address for the new 27A Security Interface (this code) at Dougs place
+//IPAddress gateway(192, 168, 20, 1);
 IPAddress subnet(255, 255, 255, 0);
 IPAddress primaryDNS(8, 8, 8, 8);    // Google DNS (crucial for NTP time sync)
 IPAddress secondaryDNS(8, 8, 4, 4);  // Optional backup DNS
@@ -1057,7 +1045,7 @@ void setup() {
   Serial.begin(115200);
   delay(1000);
 
-  //Serial.println("Booting 27a Security Interface...");
+  Serial.println("Booting 27a Security Interface...");
   delay(1000);
 
   loadConfigurationFromFlash();
@@ -1118,16 +1106,16 @@ void setup() {
 
     // Define your switches here. Max 10
     // Format: Alexa invocation name, local port no, on callback, off callback
-    Sec27ASet = new Switch("Enable 27A Perimeter Monitor", 67, Sec27ASetOn, Sec27ASetOff);
-    Sec27AUnset = new Switch("Disable 27A Perimeter Monitor", 68, Sec27AUnsetOn, Sec27AUnsetOff);
-    Sec27APanic = new Switch("27A Panic", 69, Sec27APanicOn, Sec27APanicOff);
+    Sec27ASet = new Switch("Enable New House Perimeter Monitor", 64, Sec27ASetOn, Sec27ASetOff);
+    Sec27AUnset = new Switch("Disable New House Perimeter Monitor", 65, Sec27AUnsetOn, Sec27AUnsetOff);
+    Sec27APanic = new Switch("New House Panic", 66, Sec27APanicOn, Sec27APanicOff);
 
     //Serial.println("Adding switches upnp broadcast responder");
     upnpBroadcastResponder.addDevice(*Sec27ASet);
     upnpBroadcastResponder.addDevice(*Sec27AUnset);
     upnpBroadcastResponder.addDevice(*Sec27APanic);
   }
-  digitalWrite(LedPin, HIGH);  // turn off LED
+  digitalWrite(LedPin, LOW);  // turn off LED
 
   /* dont need this really
   Serial.println("Making AlarmSoundingInputPin into an INPUT_PULLUP");
@@ -1138,7 +1126,11 @@ void setup() {
   //Serial.println("Making SetUnsetInputPin into an INPUT_PULLUP");  // used to detect 27A Security  Set/Unset state
 
   //pinMode(SetUnsetInputPin, FUNCTION_3);
-  pinMode(SetUnsetInputPin, INPUT);
+  pinMode(SetUnsetInputPin, INPUT_PULLUP);
+  /*
+pinMode(Relay1Pin, OUTPUT); This causes a crash at runtime on the esp32-c3
+pinMode(Relay2Pin, OUTPUT);
+*/
 
   // Start the server and print local IP address
   // server.begin();
@@ -1182,7 +1174,7 @@ void setup() {
   //Serial.println(" Delaying 1 sec before trying clock sync again...");
   delay(1000);
   SetTime();  // sync the clock..
-  //Serial.println(" completed 2nd clock sync ..");
+  Serial.println(" completed clock sync ..");
   // Load root certificate in DER format into WiFiClientSecure object
   bool res = 0;  //client.setCACert_P(caCert, caCertLen);
                  //if (!res) {
@@ -1230,6 +1222,7 @@ void setup() {
   pBLEScan->setWindow(99);
 
   //server.on("/", handleRoot);  // Tells the ESP32 to run handleRoot when someone visits
+
   server.on("/RTCReSync", handleRTCReSync);
   server.on("/Reboot", handleReboot);
   server.on("/ProxyLog2", handleProxyLog2);
@@ -1450,11 +1443,13 @@ void setup() {
     server.send(200, "text/plain", "OUI Prefix 98:B6:E9 Pushed Into Background Queue!");
   });
 
-   // 👈 ADD THIS LINE HERE TO REGISTER THE NEW ROUTES:
-  setupMacLookupWebRoutes(); 
+  // 👈 ADD THIS LINE HERE TO REGISTER THE NEW ROUTES:
+  setupMacLookupWebRoutes();
+
+ Serial.println("HTTP Web Server Starting!");
 
   server.begin();  // Always near the end of setup()
-  //Serial.println(F("HTTP Web Server Started!"));
+  Serial.println("HTTP Web Server Started!");
 
   // ⚡ LAUNCH THE INDEPENDENT THREAD ENGINE
   xTaskCreatePinnedToCore(
@@ -1466,7 +1461,7 @@ void setup() {
     NULL,                   // Task tracking handle
     0                       // Pin this background task to Core 0 (Web server stays on Core 1)
   );
-  //Serial.println(F("FreeRTOS Asynchronous Pinger Thread Spawned!"));
+  Serial.println("FreeRTOS Asynchronous Pinger Thread Spawned!");
 
 
   SetupWirelessOTA();  // Initialize your brand new wireless update channels
@@ -1480,105 +1475,105 @@ void setup() {
 
 void setupMacLookupWebRoutes() {
 
-    // Route 1: Toggle button handler
-    server.on("/toggle-lookup", HTTP_POST, []() {
-        autoLookupEnabled = !autoLookupEnabled;
-        
-        // 👉 FIX: Call your existing master function to save the toggle state along with everything else
-        saveConfigurationToFlash(); 
-        
-        server.send(200, "text/plain", autoLookupEnabled ? "1" : "0");
-    });
+  // Route 1: Toggle button handler
+  server.on("/toggle-lookup", HTTP_POST, []() {
+    autoLookupEnabled = !autoLookupEnabled;
 
-    // Route 2: Receive manual HTML form POST, check table updates, write changes
-    server.on("/manual-mac", HTTP_POST, []() {
-        if (!server.hasArg("oui") || !server.hasArg("vendor")) {
-            server.send(400, "text/plain", "Error: Missing input fields.");
-            return;
+    // 👉 FIX: Call your existing master function to save the toggle state along with everything else
+    saveConfigurationToFlash();
+
+    server.send(200, "text/plain", autoLookupEnabled ? "1" : "0");
+  });
+
+  // Route 2: Receive manual HTML form POST, check table updates, write changes
+  server.on("/manual-mac", HTTP_POST, []() {
+    if (!server.hasArg("oui") || !server.hasArg("vendor")) {
+      server.send(400, "text/plain", "Error: Missing input fields.");
+      return;
+    }
+
+    String inputOui = server.arg("oui");
+    String inputVendor = server.arg("vendor");
+
+    inputOui.trim();
+    inputOui.toUpperCase();
+    inputVendor.trim();
+
+    if (inputOui.length() < 8 || inputVendor.length() == 0) {
+      server.send(400, "text/plain", "Error: Invalid data format.");
+      return;
+    }
+
+    String cleanOui = inputOui.substring(0, 8);
+    bool matchFound = false;
+    int targetSlot = -1;
+
+    // Search current lookup table for existing 3-byte OUI match and replace
+    for (int i = 0; i < vendorCacheCount; i++) {
+      if (strcmp(vendorCache[i].prefix, cleanOui.c_str()) == 0) {
+        strncpy(vendorCache[i].vendorName, inputVendor.c_str(), sizeof(vendorCache[i].vendorName) - 1);
+        vendorCache[i].vendorName[sizeof(vendorCache[i].vendorName) - 1] = '\0';
+
+        matchFound = true;
+        targetSlot = i;
+        break;
+      }
+    }
+
+    // If no duplicate prefix existed, build a new record block
+    if (!matchFound) {
+      if (vendorCacheCount < MAX_CACHED_VENDORS) {
+        targetSlot = vendorCacheCount;
+        strncpy(vendorCache[targetSlot].prefix, cleanOui.c_str(), sizeof(vendorCache[targetSlot].prefix) - 1);
+        vendorCache[targetSlot].prefix[sizeof(vendorCache[targetSlot].prefix) - 1] = '\0';
+
+        strncpy(vendorCache[targetSlot].vendorName, inputVendor.c_str(), sizeof(vendorCache[targetSlot].vendorName) - 1);
+        vendorCache[targetSlot].vendorName[sizeof(vendorCache[targetSlot].vendorName) - 1] = '\0';
+
+        vendorCacheCount++;
+        nextCacheSlot = vendorCacheCount % MAX_CACHED_VENDORS;
+      } else {
+        targetSlot = nextCacheSlot;
+        strncpy(vendorCache[targetSlot].prefix, cleanOui.c_str(), sizeof(vendorCache[targetSlot].prefix) - 1);
+        vendorCache[targetSlot].prefix[sizeof(vendorCache[targetSlot].prefix) - 1] = '\0';
+
+        strncpy(vendorCache[targetSlot].vendorName, inputVendor.c_str(), sizeof(vendorCache[targetSlot].vendorName) - 1);
+        vendorCache[targetSlot].vendorName[sizeof(vendorCache[targetSlot].vendorName) - 1] = '\0';
+
+        nextCacheSlot = (nextCacheSlot + 1) % MAX_CACHED_VENDORS;
+      }
+      saveFullVendorCacheToFlash();
+    } else {
+      saveVendorToCacheFlash(targetSlot);
+    }
+
+    // 👉 FIX: Loop through active live tracking tables and dynamically swap match strings
+    // This makes your new text show up immediately without waiting for a re-scan!
+    for (int x = 0; x < deviceCount; x++) {
+      String currentMac = discoveredDevices[x].macAddress;
+      currentMac.toUpperCase();
+
+      if (currentMac.substring(0, 8) == cleanOui) {
+        // If it's a paired token, don't overwrite its friendly name
+        bool isPairedToken = false;
+        for (int k = 0; k < authDeviceCount; k++) {
+          String authMac = authDevices[k].macAddress;
+          authMac.toUpperCase();
+          if (authMac == currentMac) {
+            isPairedToken = true;
+            break;
+          }
         }
 
-        String inputOui = server.arg("oui");
-        String inputVendor = server.arg("vendor");
-
-        inputOui.trim();
-        inputOui.toUpperCase();
-        inputVendor.trim();
-
-        if (inputOui.length() < 8 || inputVendor.length() == 0) {
-            server.send(400, "text/plain", "Error: Invalid data format.");
-            return;
+        // If it's a standard ambient device, update its display name immediately
+        if (!isPairedToken) {
+          discoveredDevices[x].deviceType = inputVendor;
         }
+      }
+    }
 
-        String cleanOui = inputOui.substring(0, 8);
-        bool matchFound = false;
-        int targetSlot = -1;
-
-        // Search current lookup table for existing 3-byte OUI match and replace
-        for (int i = 0; i < vendorCacheCount; i++) {
-            if (strcmp(vendorCache[i].prefix, cleanOui.c_str()) == 0) {
-                strncpy(vendorCache[i].vendorName, inputVendor.c_str(), sizeof(vendorCache[i].vendorName) - 1);
-                vendorCache[i].vendorName[sizeof(vendorCache[i].vendorName) - 1] = '\0';
-                
-                matchFound = true;
-                targetSlot = i; 
-                break;
-            }
-        }
-
-        // If no duplicate prefix existed, build a new record block
-        if (!matchFound) {
-            if (vendorCacheCount < MAX_CACHED_VENDORS) {
-                targetSlot = vendorCacheCount;
-                strncpy(vendorCache[targetSlot].prefix, cleanOui.c_str(), sizeof(vendorCache[targetSlot].prefix) - 1);
-                vendorCache[targetSlot].prefix[sizeof(vendorCache[targetSlot].prefix) - 1] = '\0';
-                
-                strncpy(vendorCache[targetSlot].vendorName, inputVendor.c_str(), sizeof(vendorCache[targetSlot].vendorName) - 1);
-                vendorCache[targetSlot].vendorName[sizeof(vendorCache[targetSlot].vendorName) - 1] = '\0';
-                
-                vendorCacheCount++;
-                nextCacheSlot = vendorCacheCount % MAX_CACHED_VENDORS;
-            } else {
-                targetSlot = nextCacheSlot;
-                strncpy(vendorCache[targetSlot].prefix, cleanOui.c_str(), sizeof(vendorCache[targetSlot].prefix) - 1);
-                vendorCache[targetSlot].prefix[sizeof(vendorCache[targetSlot].prefix) - 1] = '\0';
-                
-                strncpy(vendorCache[targetSlot].vendorName, inputVendor.c_str(), sizeof(vendorCache[targetSlot].vendorName) - 1);
-                vendorCache[targetSlot].vendorName[sizeof(vendorCache[targetSlot].vendorName) - 1] = '\0';
-                
-                nextCacheSlot = (nextCacheSlot + 1) % MAX_CACHED_VENDORS;
-            }
-            saveFullVendorCacheToFlash();
-        } else {
-            saveVendorToCacheFlash(targetSlot);
-        }
-
-        // 👉 FIX: Loop through active live tracking tables and dynamically swap match strings
-        // This makes your new text show up immediately without waiting for a re-scan!
-        for (int x = 0; x < deviceCount; x++) {
-            String currentMac = discoveredDevices[x].macAddress;
-            currentMac.toUpperCase();
-            
-            if (currentMac.substring(0, 8) == cleanOui) {
-                // If it's a paired token, don't overwrite its friendly name
-                bool isPairedToken = false;
-                for (int k = 0; k < authDeviceCount; k++) {
-                    String authMac = authDevices[k].macAddress;
-                    authMac.toUpperCase();
-                    if (authMac == currentMac) {
-                        isPairedToken = true;
-                        break;
-                    }
-                }
-                
-                // If it's a standard ambient device, update its display name immediately
-                if (!isPairedToken) {
-                    discoveredDevices[x].deviceType = inputVendor;
-                }
-            }
-        }
-
-        server.send(200, "text/plain", "OK");
-    });
+    server.send(200, "text/plain", "OK");
+  });
 }
 
 void ProcessBackgroundVendorLookup() {
@@ -1587,14 +1582,14 @@ void ProcessBackgroundVendorLookup() {
   if (millis() - lastLookupCheckTime < 6000) return;
   lastLookupCheckTime = millis();
 
-  // 👈 NEW REQUIREMENT CHECK: If the user disabled auto lookup via the web page, 
+  // 👈 NEW REQUIREMENT CHECK: If the user disabled auto lookup via the web page,
   // clear out any pending background tasks instantly and drop out of the routine.
   if (!autoLookupEnabled) {
     if (pendingMacPrefix != "") {
       Serial.printf("[BACKGROUND WORKER]: Auto lookup is DISABLED. Flushing queued request for: %s\n", pendingMacPrefix.c_str());
-      pendingMacPrefix = ""; // Clear request immediately to keep queue unblocked
+      pendingMacPrefix = "";  // Clear request immediately to keep queue unblocked
     }
-    return; // Drop out instantly
+    return;  // Drop out instantly
   }
 
   // THREAD-SAFE GATING: Check our local flag instead of hitting the raw Bluetooth hardware object
@@ -1784,21 +1779,25 @@ Serial.println("\n--- [BACKGROUND WORKER]: ProcessBackgroundVendorLookup called 
 
 void loop() {
 
+  //Serial.println("void loop start");
+ 
+
   // 1. RUN THIS FIRST ON EVERY PASS:
   // Dynamically settles your securitySystemDisableAuthorised flags and handles manual overrides instantly
   EvaluateSecurityGateState();
 
+/* is this locking up running the loop ???
   if (WiFi.status() != WL_CONNECTED) {
     delay(1);
     connectWifi();
     return;
   }
-
+*/
   Sec27ASetState = !digitalRead(SetUnsetInputPin);  //.  ******** REMOVE THE ! When deploying at 27A ***************
   delay(100);
   if (Sec27ASetState == LOW) {
     if (PrevSec27ASetState == HIGH) {
-      //Serial.println("27a security has just entered Set State");
+      Serial.println("27a security has just entered Set State");
       VBNumber = 02;  // 27a Security Set code
       VBNumberString = "02";
       ProxyPost();
@@ -1810,7 +1809,7 @@ void loop() {
 
   if (Sec27ASetState == HIGH) {
     if (PrevSec27ASetState == LOW) {
-      //Serial.println("27a security has just entered Unset State ");
+      Serial.println("27a security has just entered Unset State ");
       VBNumber = 03;  // 27a Security Unset code
       VBNumberString = ("03 " + authorisingDeviceNames);
       ProxyPost();
@@ -1860,6 +1859,7 @@ void loop() {
   WatchDogLoopCounter = WatchDogLoopCounter + 1;
   ////Serial.println(WatchDogLoopCounter);
   if (WatchDogLoopCounter > WatchDogCounterLoopThreshold) {
+    Serial.println("in watchdog loop");
     //PanelBuzzerCount = (PanelBuzzerCountThreshold - 4);
     WatchDogLoopCounter = 0;
     VBNumber = 40;  // 27A security watchdog code
@@ -1879,10 +1879,10 @@ void loop() {
 
     currentseconds = currentseconds + 1;
     if (currentseconds == 60) {
-      // Things to do every second here
+   
       currentseconds = 0;
       currentminutes = currentminutes + 1;
-      ////Serial.println("another minute has passed");
+      Serial.println("another minute has passed");
     }
     if (currentminutes == 60) {
 
@@ -1933,12 +1933,9 @@ void loop() {
     }
   }
 
-  // Process incoming web browser connections instantly without locking the CPU
-  server.handleClient();
-
   // ⚡ NEW: Safely processes queued web queries without freezing your scanners
   ProcessBackgroundVendorLookup();
-
+ //Serial.println("after vendor lookup");
   delay(1);  // Crucial safety yield to prevent watchdog timer resets
 
   // --- DYNAMIC SLIDER-CONTROLLED BACKGROUND ENGINE WITH LIVE CLEANUP ---
@@ -1952,6 +1949,7 @@ void loop() {
 
   // Step A: Kick off a fresh background scan based on your slider length
   if (currentMillis - lastBleCycle > scanMs && !scanTriggered) {
+    Serial.println("bluetooth scan");
     pBLEScan->clearResults();  // Reset hardware cache
 
     // Scan asynchronously for the duration chosen on the web page slider
@@ -2092,16 +2090,33 @@ void loop() {
     lastBleCycle = currentMillis;
   }
 
-
+  // Rapidly blink without blocking execution if security gate is open
+  if (securitySystemDisableAuthorised == true) {
+    unsigned long currentWinkMillis = millis();
+    if (currentWinkMillis - previousWinkMillis >= warningWinkInterval) {
+      previousWinkMillis = currentWinkMillis;
+      ledWinkState = !ledWinkState;
+      digitalWrite(LedPin, ledWinkState);
+    }
+  } else {
+      digitalWrite(LedPin, HIGH); // ensure led off otherwise// needsw to be here instead
+}
 
   // Light weight non-blocking OTA execution handle loop
   if (millis() - lastOtaCheck >= otaInterval) {
     ArduinoOTA.handle();  // Checks the Wi-Fi card for any incoming update binaries
     lastOtaCheck = millis();
+    //Serial.println("in OTA loop");
   }
 
 
   ArduinoOTA.handle();  // Checks the Wi-Fi card for any incoming update binaries
+
+ //Serial.println("b4 handle client");
+  // Process incoming web browser connections instantly without locking the CPU
+  server.handleClient();
+
+// Serial.println("after handle client");
 
   delay(1);  // Small safety yield to prevent watchdog resets
 
@@ -2109,44 +2124,29 @@ void loop() {
 
 
 void handleRoot() {
+  Serial.println("New Client in handleRoot.");
 
-  //Serial.println("New Client in handleRoot.");  // print a message out in the serial port
+  // ======================================================
+  // ⚡ FIX: ENABLE CHUNKED STREAMING PROTOCOL CORRECTLY
+  // ======================================================
+  server.setContentLength(CONTENT_LENGTH_UNKNOWN); // Forces Transfer-Encoding: chunked
+  server.send(200, "text/html", "");              // Sends headers without a "0 length" lock
 
-
-
-
-  //Serial.print("Incoming Request URI: ");
-  //Serial.println(request->url());  Compilation error: 'request' was not declared in this scope
-
-  //Serial.print("Host Header Data: ");
-  //Serial.println(request->hostHeader());
-
-  /* Serial.print("Checking 'key' argument: ");
-if (request->hasArg("key")) {
-  Serial.println(request->arg("key"));
-} else {
-  Serial.println("No 'key' argument found in URL");
-}
-*/
+  String html = "";
 
   // Start building your HTML response string
   // --- START OF HTML WEB PAGE ---
-  String html = "<!DOCTYPE html>\n<html>\n<head>\n";
-  html += "<meta charset='UTF-8'>";  // Crucial for emojis inside the header
+  html = "<!DOCTYPE html>\n<html>\n<head>\n";
+  html += "<meta charset='UTF-8'>";
   html += "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">";
   html += "<link rel=\"icon\" href=\"data:,\">";
   html += "<title>Security Access Hub</title>";
 
-  // ======================================================
-  // ⚡ FIXED: UN-STUCK AUTOMATIC AUTO-REFRESH ENGINE
-  // ======================================================
+  // JavaScript Auto-Refresh Engine
   html += "<script>";
-  // Safety override: Wipes old stuck input locks whenever the page actually updates
   html += "if (window.performance && window.performance.navigation.type === 0) {";
   html += "  sessionStorage.removeItem('typing');";
   html += "}";
-
-  // Execution loop constraint: Reload page every 2000ms if not typing
   html += "setInterval(function() {";
   html += "  var isTypingActive = sessionStorage.getItem('typing');";
   html += "  if (isTypingActive === null || isTypingActive === 'false') {";
@@ -2155,38 +2155,26 @@ if (request->hasArg("key")) {
   html += "}, 2000);";
   html += "</script>";
 
-  // ======================================================
-  // RETAINED: YOUR RENDER STYLING (MOBILE CSS LAYOUT)
-  // ======================================================
+  server.sendContent(html); // Stream first chunk
+  html = "";   
+
+  // CSS Styles and Header Content
   html += "<style>html { font-family: Helvetica; display: inline-block; margin: 0px auto; text-align: center;}";
   html += ".button { background-color: #4CAF50; border: none; color: white; padding: 16px 40px;";
   html += "text-decoration: none; font-size: 30px; margin: 2px; cursor: pointer;}";
   html += ".button2 {background-color: #555555;}</style>\n</head>\n";
 
   html += "<body style='background:#f4f4f4; margin:10px;'>";
+  html += "<h1>27A Security Interface </h1>";
 
-  html += "<body><h1>27A Security Interface </h1>";
-
-  // Display date
+  // Display date and times
   html += "<p>Current Date is " + String(currentday) + " / " + String(currentmonth) + "</p>";
+  html += "<p>Current Time is " + String(currenthours) + ":" + String(currentminutes) + ":" + String(currentseconds) + "</p>";
+  html += "<p>Last Restart was " + LastRebootTime + " on " + LastRebootDate + " which was " + String(UpTimeDays) + " days ago</p>";
 
-  // Display current time of day
-  html += "<p>Current Time is " + String(currenthours) + ":" + String(currentminutes) + ":" + String(currentseconds) + ":" + "</p>";
+    server.sendContent(html); // Stream second chunk
+  html = ""; 
 
-  // Display last Reboot Time
-  html += "<p>Last Restart was " + LastRebootTime + " on " + LastRebootDate + " which was " + String(UpTimeDays) + " days ago" + "</p>";
-
-  /*
-works, but irrelevant 
-  // Display current state, and show ON/OFF buttons
-  html += "<p>LED Status: <strong>" + ledState + "</strong></p>";
-  if (ledState == "OFF") {
-    html += "<p><a href=\"/H\"><button class=\"button\">TURN ON</button></a></p>";
-
-  } else {
-    html += "<p><a href=\"/L\"><button class=\"button button2\">TURN OFF</button></a></p>";
-  }
-  */
 
   // ======================================================
   // LIVE ALEXA DISARM GATE STATUS BANNER
@@ -2194,34 +2182,6 @@ works, but irrelevant
   unsigned long now = millis();
   String bannerHtml = "";
 
-  /*
-
-  // Enforce clock validation to dynamically drop the flag if time has run out
-  if (securitySystemDisableAuthorised) {
-    unsigned long timeElapsed = (now - gateActivationTime) / 1000;
-    if (timeElapsed >= (unsigned long)voiceGateOpenDurationSeconds) {
-      // Time expired: Cleanly close the system gate back down
-      securitySystemDisableAuthorised = false;
-      authorisingDeviceNames = "";
-    }
-  }
-
-  // Draw the resulting conditional interface boxes
-  if (securitySystemDisableAuthorised) {
-    unsigned long remainingTime = voiceGateOpenDurationSeconds - ((now - gateActivationTime) / 1000);
-    bannerHtml += "<div style='margin: 15px auto; width: 95%; max-width: 700px; background-color: #d4edda; border: 2px solid #c3e6cb; color: #155724; padding: 15px; text-align: center; border-radius: 5px;'>";
-    bannerHtml += "<h2 style='margin: 0 0 5px 0;'>🔓 Alexa Disarm Gate: OPEN</h2>";
-    bannerHtml += "Authorized by: <b style='text-decoration: underline; color: #0b2e13;'>" + authorisingDeviceNames + "</b><br>";
-    bannerHtml += "<span style='font-size: 14px; font-weight: bold;'>Window expires in: <span style='color:red; font-size:18px;'>" + String(remainingTime) + "</span> seconds</span>";
-    bannerHtml += "</div>";
-  } else {
-    bannerHtml += "<div style='margin: 15px auto; width: 95%; max-width: 700px; background-color: #f8d7da; border: 1px solid #f5c6cb; color: #721c24; padding: 10px; text-align: center; border-radius: 5px;'>";
-    bannerHtml += "<h3 style='margin: 0;'>🔒 Alexa Disarm Gate: LOCKED</h3>";
-    bannerHtml += "<small style='color: #666;'>Bring a verified arrival token into proximity to authorize system overrides.</small>";
-    bannerHtml += "</div>";
-  }
-
-  */
 
   // Enforce clock validation to dynamically drop the flag if time has run out
   // FIXED: Added 'currentGateState != GATE_BYPASS' to protect manual overrides!
@@ -2280,6 +2240,13 @@ works, but irrelevant
 
   html += "</div>";
 
+    server.sendContent(html); // Send this chunk out of memory
+  html = "";   
+
+  
+
+
+
   // --- RENDERING MANUAL OVERRIDE CONTROL BUTTON PANEL ---
   html += "<div style='margin: 15px auto; width:95%; max-width:650px; text-align: center; font-size: 0.9em;'>";
   html += "  <span style='margin-right:8px; font-weight:bold;'>Manual Gate Override:</span>";
@@ -2300,162 +2267,10 @@ works, but irrelevant
     html += "<p>Current Security System Status: <strong> SET (enabled/on) </strong></p>";
     html += "<p><a href=\"UNSET\"><button class=\"button button2\">UnSET Alarm</button></a></p>";
   }
-  /*
-  // --- STREAMLINED FILTER CONTROLLER BOX (CONVERTED TO TEXT ENTRY WITH FREEZE HOOKS) ---
-  html += "<div style='text-align: center; margin: 10px auto; padding: 10px; width: 90%; max-width: 380px; border: 1px solid #bbb; border-radius: 6px; font-size: 0.9em; background-color: #f9f9f9;'>";
-  html += "  <h5 style='margin: 0 0 8px 0;'>Bluetooth Radio & Filter Settings</h5>";
-  html += "  <form action='/setRadioParams' method='GET'>";
 
-  // Input 1: RSSI Sensitivity
-  html += "    <div style='margin-bottom: 8px;'>";
-  html += "      <label style='display:inline-block; width:140px; text-align:right; margin-right:10px;'>RSSI Gate (dBm):</label>";
-  html += "      <input type='number' name='rssi' min='-100' max='-10' step='1' value='" + String(rssiThreshold) + "' style='width: 60px; text-align: center;' "
-                                                                                                                   "onfocus=\"sessionStorage.setItem('typing', 'true');\" "
-                                                                                                                   "onblur=\"sessionStorage.removeItem('typing');\">";
-  html += "    </div>";
-
-  // Input 2: Detection Window Timeout
-  html += "    <div style='margin-bottom: 8px;'>";
-  html += "      <label style='display:inline-block; width:140px; text-align:right; margin-right:10px;'>Keep-Alive Window:</label>";
-  html += "      <input type='number' name='window' min='10' max='300' step='5' value='" + String(presenceWindowSeconds) + "' style='width: 60px; text-align: center;' "
-                                                                                                                           "onfocus=\"sessionStorage.setItem('typing', 'true');\" "
-                                                                                                                           "onblur=\"sessionStorage.removeItem('typing');\"> s";
-  html += "    </div>";
-
-  // Input 3: Scan Slice Duration
-  html += "    <div style='margin-bottom: 12px;'>";
-  html += "      <label style='display:inline-block; width:140px; text-align:right; margin-right:10px;'>Scan Slice:</label>";
-  html += "      <input type='number' name='scantime' min='1' max='10' step='1' value='" + String(scanSliceDuration) + "' style='width: 60px; text-align: center;' "
-                                                                                                                       "onfocus=\"sessionStorage.setItem('typing', 'true');\" "
-                                                                                                                       "onblur=\"sessionStorage.removeItem('typing');\"> s";
-  html += "    </div>";
-
-  html += "    <input type='submit' class='buttonsmall' style='padding: 4px 15px; font-size: 0.85em; cursor: pointer;' value='Apply Changes'>";
-  html += "  </form>";
-  html += "</div>";
-*/
-  /*
-  // --- COMPACT 4-PARAMETER FILTER CONTROLLER BOX WITH FREEZE HOOKS ---
-  html += "<div style='text-align: center; margin: 10px auto; padding: 10px; width: 90%; max-width: 380px; border: 1px solid #bbb; border-radius: 6px; font-size: 0.85em; background-color: #f9f9f9;'>";
-  html += "  <h5 style='margin: 0 0 6px 0; font-size: 1.1em;'>BluetoothRadio & Filter Settings</h5>";
-  html += "  <form action='/setRadioParams' method='GET' onsubmit='if(pBLEScan){pBLEScan->stop();}'>";
-  
-  // Slider 1: RSSI Sensitivity
-  html += "    <div style='margin-bottom: 5px;'>";
-  html += "      <label style='display:block; margin-bottom:1px;'>Gate: <b>" + String(rssiThreshold) + " dBm</b></label>";
-  html += "      <input type='range' name='rssi' min='-100' max='-10' step='1' value='" + String(rssiThreshold) + "' style='width: 85%; height: 3px;'>";
-  html += "    </div>";
-  
-  // Slider 2: Detection Window Timeout
-  html += "    <div style='margin-bottom: 5px;'>";
-  html += "      <label style='display:block; margin-bottom:1px;'>Keep-Alive Window: <b>" + String(presenceWindowSeconds) + "s</b></label>";
-  html += "      <input type='range' name='window' min='10' max='300' step='5' value='" + String(presenceWindowSeconds) + "' style='width: 85%; height: 3px;'>";
-  html += "    </div>";
-  
-  // Slider 3: Scan Slice Duration
-  html += "    <div style='margin-bottom: 5px;'>";
-  html += "      <label style='display:block; margin-bottom:1px;'>Scan Slice: <b>" + String(scanSliceDuration) + "s</b></label>";
-  html += "      <input type='range' name='scantime' min='1' max='10' step='1' value='" + String(scanSliceDuration) + "' style='width: 85%; height: 3px;'>";
-  html += "    </div>";
-  
-  // Slider 4: Absence Lockout Window
-  html += "    <div style='margin-bottom: 8px;'>";
-  html += "      <label style='display:block; margin-bottom:1px;'>Min Absence Rule: <b>" + String(minAbsenceMinutes) + " mins</b></label>";
-  html += "      <input type='range' name='absence' min='1' max='60' step='1' value='" + String(minAbsenceMinutes) + "' style='width: 85%; height: 3px;'>";
-  html += "    </div>";
-  
-  html += "    <input type='submit' class='buttonsmall' style='padding: 3px 8px; font-size: 0.8em;' value='Apply Changes'>";
-  html += "  </form>";
-  html += "</div>";
-  */
-  /*
-
-  // --- COMPACT 4-PARAMETER TEXT BOX CONTROLLER WITH BROWSER INTERRUPT HOOKS ---
-  html += "<div style='text-align: center; margin: 10px auto; padding: 10px; width: 90%; max-width: 380px; border: 1px solid #bbb; border-radius: 6px; font-size: 0.85em; background-color: #f9f9f9;'>";
-  html += "  <h5 style='margin: 0 0 6px 0; font-size: 1.1em;'>Radio & Safety Tweaks</h5>";
-  html += "  <form action='/setRadioParams' method='GET' onsubmit='freezeUpdates();'>";
-  
-  // Input 1: RSSI Sensitivity
-  html += "    <div style='margin-bottom: 6px;'>";
-  html += "      <label style='display:inline-block; width:180px; text-align:left;'>Gate Sensitivity (dBm):</label>";
-  html += "      <input type='text' class='param-input' name='rssi' value='" + String(rssiThreshold) + "' style='width: 50px; padding: 2px; text-align: center;' onfocus='isTyping=true;' onblur='isTyping=false;'>";
-  html += "    </div>";
-  
-  // Input 2: Detection Window Timeout
-  html += "    <div style='margin-bottom: 6px;'>";
-  html += "      <label style='display:inline-block; width:180px; text-align:left;'>Keep-Alive Window (s):</label>";
-  html += "      <input type='text' class='param-input' name='window' value='" + String(presenceWindowSeconds) + "' style='width: 50px; padding: 2px; text-align: center;' onfocus='isTyping=true;' onblur='isTyping=false;'>";
-  html += "    </div>";
-  
-  // Input 3: Scan Slice Duration
-  html += "    <div style='margin-bottom: 6px;'>";
-  html += "      <label style='display:inline-block; width:180px; text-align:left;'>Scan Slice length (s):</label>";
-  html += "      <input type='text' class='param-input' name='scantime' value='" + String(scanSliceDuration) + "' style='width: 50px; padding: 2px; text-align: center;' onfocus='isTyping=true;' onblur='isTyping=false;'>";
-  html += "    </div>";
-  
-  // Input 4: Minimum Absence Rule
-  html += "    <div style='margin-bottom: 10px;'>";
-  html += "      <label style='display:inline-block; width:180px; text-align:left;'>Min Absence Rule (mins):</label>";
-  html += "      <input type='text' class='param-input' name='absence' value='" + String(minAbsenceMinutes) + "' style='width: 50px; padding: 2px; text-align: center;' onfocus='isTyping=true;' onblur='isTyping=false;'>";
-  html += "    </div>";
-  
-  html += "    <input type='submit' class='buttonsmall' style='padding: 4px 12px; font-size: 0.85em;' value='Apply Changes'>";
-  html += "  </form>";
-  html += "</div>";
-
-  // ==========================================
-  //  SORT DEVICES BY RSSI (Strongest First)
-  // ==========================================
-  for (int i = 0; i < deviceCount - 1; i++) {
-    for (int j = 0; j < deviceCount - i - 1; j++) {
-      // If the next device has a stronger/higher RSSI, swap them
-      if (discoveredDevices[j].rssi < discoveredDevices[j + 1].rssi) {
-        auto temp = discoveredDevices[j];
-        discoveredDevices[j] = discoveredDevices[j + 1];
-        discoveredDevices[j + 1] = temp;
-      }
-    }
-  }
-*/
-
-  /* 
-here to copy freeze hook structure
-    // ======================================================
-  // UPDATED: SETTINGS CONFIGURATION FORM (FREEZE-SAFE OVERRIDES)
-  // ======================================================
-  html += "<div style='margin: 20px auto; width: 95%; max-width: 700px; text-align: center; border: 1px dashed #666; padding: 15px; background-color: #fff;'>";
-  //html += "<form action='/save-settings' method='POST'>"; I think this should be GET
-  html += "<form action='/save-settings' method='GET'>"; I think this should be GET
-  
-  // 1. ACTIVE PRESENCE FIELD
-  html += "<div style='display: inline-block; margin: 5px 10px;'><b>Active Presence: </b>"
-          "<input type='number' name='window' value='"
-          + String(authTimeWindowSeconds) + "' style='width:50px; text-align:center;' "
-                                            "onfocus=\"sessionStorage.setItem('typing', 'true');\" "
-                                            "onblur=\"sessionStorage.removeItem('typing');\">s</div>";
-  
-  
-  
-   html += "    <input type='submit' class='buttonsmall' style='padding: 4px 15px; font-size: 0.85em; cursor: pointer;' value='Apply Changes'>";
-  //html += "<div style='margin-top: 15px;'><input type='submit' value='Save All Settings' style='padding: 6px 20px; font-weight: bold; background-color: #333; color: white; border: none; cursor: pointer;'></div>";
-  html += "</form></div>";
-
-  
-  */
-  // ======================================================
-  // NEW: SETTINGS CONFIGURATION FORM (Adjustable Time Window)
-  // ======================================================
-  /*
-  html += "<div style='margin: 20px auto; width: 95%; max-width: 650px; text-align: center; border: 1px dashed #666; padding: 10px;'>";
-  html += "<form action='/save-settings' method='GET'>";
-  html += "<b>Bluetooth & Ping Device 2FA Authorisation Window: </b>";
-  html += "<input type='number' name='window' value='" + String(authTimeWindowSeconds) + "' style='width:60px; text-align:center;'> seconds ";
-    //This needs freeze hooks
-                                             "onfocus=\"sessionStorage.setItem('typing', 'true');\" "
-                                            "onblur=\"sessionStorage.removeItem('typing');\">s</div>";
-  html += "<input type='submit' value='Update Window'>";
-  html += "</form></div>";
-*/
+    server.sendContent(html); // Send this chunk out of memory
+  html = "";   
+ 
 
 
   // --- COMPACT 4-PARAMETER TEXT BOX CONTROLLER (FIXED FOR SESSIONSTORAGE) ---
@@ -2492,22 +2307,9 @@ here to copy freeze hook structure
   html += "  </form>";
   html += "</div>";
 
-  /*
-  html += "<div style='margin: 20px auto; width: 95%; max-width: 650px; text-align: center; border: 1px dashed #666; padding: 10px;'>";
-  html += "  <form action='/save-settings' method='GET' onsubmit='isTyping=true;'>";
-  html += "    <b>Bluetooth & Ping Device 2FA Authorisation Window: </b>";
+  server.sendContent(html); // Send this chunk out of memory
+  html = "";   
   
-  // Notice the closing angle bracket (>) is removed from this line so we can append our hooks inside the tag:
-  html += "    <input type='number' name='window' value='" + String(authTimeWindowSeconds) + "' style='width:60px; text-align:center;' ";
-  
-  // Correctly assign the string pieces and toggle the shared 'isTyping' variable
-  html += "onfocus='isTyping=true;' ";
-  html += "onblur='isTyping=false;'> seconds ";
-  
-  html += "    <input type='submit' class='buttonsmall' style='padding: 3px 8px;' value='Update Window'>";
-  html += "  </form>";
-  html += "</div>";
-*/
 
   // --- COMPACT 2FA BOX (FIXED FOR SESSIONSTORAGE) ---
   html += "<div style='margin: 20px auto; width: 95%; max-width: 650px; text-align: center; border: 1px dashed #666; padding: 10px;'>";
@@ -2536,6 +2338,9 @@ here to copy freeze hook structure
       }
     }
   }
+
+    server.sendContent(html); // Send this chunk out of memory
+  html = "";   
 
   // ======================================================
   // TABLE 1: ACTIVE BLUETOOTH TOKENS (SCANNER)
@@ -2596,34 +2401,37 @@ here to copy freeze hook structure
   }
   html += "</table>";
 
-// new Web form for manual mac entry
+  server.sendContent(html); // Send this chunk out of memory
+  html = "";   
 
- // ============================================================================
+  // new Web form for manual mac entry
+
+  // ============================================================================
   // C++ HTML STRING CONCATENATION (Centered, Stable & Integrated with SessionStorage)
   // ============================================================================
 
   // 1. Control Panel Layout for Bluetooth MAC Lookup Settings (Centered Wrapper)
   html += "<div class='config-section' style='margin: 0 auto 30px auto; padding: 15px; border: 1px solid #444; border-radius: 6px; background-color: #fcfcfc; width: 95%; max-width: 700px; text-align: center;'>";
   html += "<h3 style='margin-top: 0;'>Bluetooth MAC Lookup Settings</h3>";
-  
+
   // 👉 FIXED FLICKERING: Pull state natively inline on render instead of hitting a background fetch loop
   if (autoLookupEnabled) {
-      html += "<p>Automatic OUI Lookup Service: <strong id='lookup-status' style='color: darkgreen;'>Enabled</strong></p>";
-      html += "<button id='toggle-lookup-btn' onclick='toggleAutoLookup()' style='padding: 6px 12px; cursor: pointer;'>Stop Auto Lookup</button>";
+    html += "<p>Automatic OUI Lookup Service: <strong id='lookup-status' style='color: darkgreen;'>Enabled</strong></p>";
+    html += "<button id='toggle-lookup-btn' onclick='toggleAutoLookup()' style='padding: 6px 12px; cursor: pointer;'>Stop Auto Lookup</button>";
   } else {
-      html += "<p>Automatic OUI Lookup Service: <strong id='lookup-status' style='color: darkred;'>Disabled</strong></p>";
-      html += "<button id='toggle-lookup-btn' onclick='toggleAutoLookup()' style='padding: 6px 12px; cursor: pointer;'>Start Auto Lookup</button>";
+    html += "<p>Automatic OUI Lookup Service: <strong id='lookup-status' style='color: darkred;'>Disabled</strong></p>";
+    html += "<button id='toggle-lookup-btn' onclick='toggleAutoLookup()' style='padding: 6px 12px; cursor: pointer;'>Start Auto Lookup</button>";
   }
   html += "</div>";
 
   // 2. Input Form Layout Container formatted as a Centered Table to match your layout
   html += "<div class='config-section' style='margin: 0 auto 30px auto; width: 95%; max-width: 700px;'>";
   html += "<h3 style='text-align: center;'>Manual Manufacturer OUI Override Registry</h3>";
-  
+
   // 👉 FIXED REFRESH OVERWRITE: Setting session tracking tag true on form submission
   html += "<form id='manual-mac-form' onsubmit=\"sessionStorage.setItem('typing', 'true'); submitManualMac(event);\">";
   html += "<table border='1' align='center' style='width: 100%; border-collapse: collapse; background-color: #fcfcfc;'>";
-  
+
   // Row 1: MAC / OUI Prefix Input Field
   html += "<tr>";
   html += "<td style='padding: 10px; font-weight: bold; width: 30%; text-align: right;'>MAC or OUI Prefix:</td>";
@@ -2651,10 +2459,13 @@ here to copy freeze hook structure
   html += "<button type='submit' style='padding: 8px 20px; background-color: #007bff; color: white; border: none; border-radius: 4px; cursor: pointer; font-weight: bold;'>Commit & Write to Flash</button>";
   html += "</td>";
   html += "</tr>";
-  
+
   html += "</table>";
   html += "</form>";
   html += "</div>";
+
+    server.sendContent(html); // Send this chunk out of memory
+  html = "";   
 
   // 3. JavaScript Event Drivers (Embedded directly inside the web interface output)
   html += "<script>";
@@ -2689,6 +2500,9 @@ here to copy freeze hook structure
   html += "  .finally(() => setPageFreeze(false));";
   html += "}";
 
+  server.sendContent(html); // Send this chunk out of memory
+  html = "";   
+
   html += "function submitManualMac(event) {";
   html += "  event.preventDefault();";
   html += "  setPageFreeze(true);";
@@ -2698,7 +2512,7 @@ here to copy freeze hook structure
   html += "  const ouiPrefix = rawMac.substring(0, 8);";
   html += "  if (ouiPrefix.length < 8 || ouiPrefix.split(':').length !== 3) {";
   html += "    alert('Invalid entry layout format. Please provide a standard MAC profile.');";
-  html += "    sessionStorage.removeItem('typing');"; // Release session lock
+  html += "    sessionStorage.removeItem('typing');";  // Release session lock
   html += "    setPageFreeze(false);";
   html += "    return;";
   html += "  }";
@@ -2721,20 +2535,23 @@ here to copy freeze hook structure
   html += "  })";
   html += "  .catch(err => alert('Network submission delivery failure encountered.'))";
   html += "  .finally(() => {";
-  html += "    sessionStorage.removeItem('typing');"; // Release session refresh lock cleanly
+  html += "    sessionStorage.removeItem('typing');";  // Release session refresh lock cleanly
   html += "    setPageFreeze(false);";
   html += "  });";
   html += "}";
   html += "</script>";
 
-// new Web form for manual mac entry
+  server.sendContent(html); // Send this chunk out of memory
+  html = "";   
+
+  // new Web form for manual mac entry
   // ======================================================
   // UPDATED: SETTINGS CONFIGURATION FORM (FREEZE-SAFE OVERRIDES)
   // ======================================================
   html += "<div style='margin: 20px auto; width: 95%; max-width: 700px; text-align: center; border: 1px dashed #666; padding: 15px; background-color: #fff;'>";
   //html += "<form action='/save-settings' method='POST'>"; I think this should be GET
   html += "<form action='/save-settings' method='GET'>";  // I think this should be GET
-    html += "<h3 style='margin-top: 0;'>Ping Device Settings</h3>";
+  html += "<h3 style='margin-top: 0;'>Ping Device Settings</h3>";
 
   // 1. ACTIVE PRESENCE FIELD
   html += "<div style='display: inline-block; margin: 5px 10px;'><b>Active Presence: </b>"
@@ -2769,6 +2586,8 @@ here to copy freeze hook structure
   //html += "<div style='margin-top: 15px;'><input type='submit' value='Save All Settings' style='padding: 6px 20px; font-weight: bold; background-color: #333; color: white; border: none; cursor: pointer;'></div>";
   html += "</form></div>";
 
+  server.sendContent(html); // Send this chunk out of memory
+  html = "";   
 
   // ======================================================
   // NEW: TABLE 3: AUTHORISED IPHONE NETWORK PINGER DATABASE
@@ -2827,6 +2646,9 @@ here to copy freeze hook structure
   }
   html += "</table>";
 
+    server.sendContent(html); // Send this chunk out of memory
+  html = "";   
+
   // ======================================================
   // UPDATED: TABLE 2: NOMINATED AUTHORISED TOKENS (SECURITY DATABASE)
   // ======================================================
@@ -2878,6 +2700,8 @@ here to copy freeze hook structure
           break;
         }
       }
+  server.sendContent(html); // Send this chunk out of memory
+  html = "";   
 
       // Fallback Safety Check: If the device wasn't found in the active scan array at all
       if (liveStatus.indexOf("Out of Range") != -1) {
@@ -2891,6 +2715,9 @@ here to copy freeze hook structure
     }
   }
   html += "</table>";
+
+    server.sendContent(html); // Send this chunk out of memory
+  html = "";   
 
   // Old logging section
 
@@ -2919,10 +2746,15 @@ here to copy freeze hook structure
 
   html += "</body></html>";
 
+    server.sendContent(html); // Send this chunk out of memory
+  html = "";   
+
+    // 2. CRITICAL FINAL STEP: Tell the browser you are finished
+  server.sendContent(""); 
+
   // --- END OF HTML WEB PAGE ---
 
-  // Instantly send the full page text to the browser non-blockingly
-  server.send(200, "text/html; charset=utf-8", html);
+
 
 }  // end of handleroot
 
@@ -2946,39 +2778,27 @@ bool Sec27ASetOn() {
       //Serial.println("XXX Pulsing Relay on ...");
 
       // Turn on #1 Relay
-      delay(10);
-      Serial.write(rel1ON, sizeof(rel1ON));
-      delay(10);
+
+      digitalWrite(Relay1Pin, HIGH);  // turn on relay1
+
       //Serial.println("Turning Relay#1 On ...");
       ProxyRequestText = "Authorised Keys found " + authorisingDeviceNames;
       RotateProxyLogArray();
       ProxyRequestText = "Set Request Honored";
       RotateProxyLogArray();
 
-      // Turn on #1 Relay
-      delay(10);
-      Serial.write(rel1ON, sizeof(rel1ON));
-      delay(10);
-      //Serial.println("Turning Relay#1 On ...");
-
-      delay(1500);
+      delay(1000);
       ;
 
       //Serial.println("XXX Pulsing Relay off again ...");  // this makes a pulse which is what the security system wants
 
       // Turn off #1 Relay
       delay(10);
-      Serial.write(rel1OFF, sizeof(rel1OFF));
+      digitalWrite(Relay1Pin, LOW);  // turn off relay1
       delay(10);
       //Serial.println("Turning Relay#1 Off ...");
       //ProxyRequestText = "Relay 1 pulsing off - set";
       //RotateProxyLogArray();
-
-      // Turn off #1 Relay
-      delay(10);
-      Serial.write(rel1OFF, sizeof(rel1OFF));
-      delay(10);
-      //Serial.println("Turning Relay#1 Off ...");
     }
   } else {
     //Serial.println("27A Security is already Set - not pulsing relay!");
@@ -3038,38 +2858,27 @@ bool Sec27AUnsetOn() {
 
       // Turn on #1 Relay
       delay(10);
-      Serial.write(rel1ON, sizeof(rel1ON));
-      delay(10);
+      digitalWrite(Relay1Pin, HIGH);  // turn on relay1
+
       Serial.println("Turning Relay#1 On ...");
       ProxyRequestText = "Authorised Keys found " + authorisingDeviceNames;
       RotateProxyLogArray();
       ProxyRequestText = "UnSet Request Honored ";
       RotateProxyLogArray();
 
-      // Turn on #1 Relay
-      delay(10);
-      Serial.write(rel1ON, sizeof(rel1ON));
-      delay(10);
-      //Serial.println("Turning Relay#1 On ...");
-
-      delay(1500);  // 1.5 sec pulse
+      delay(1000);  // 1.0 sec pulse
       ;
 
       //Serial.println("XXX Pulsing Relay off again ...");  // this makes a pulse which is what the security system wants
 
       // Turn off #1 Relay
-      delay(10);
-      Serial.write(rel1OFF, sizeof(rel1OFF));
+
+      digitalWrite(Relay1Pin, LOW);  // turn off relay1
       delay(10);
       //Serial.println("Turning Relay#1 Off ...");
       //ProxyRequestText = "Pulsing relay 1 off - unset";
       //RotateProxyLogArray();
 
-      // Turn off #1 Relay
-      delay(10);
-      Serial.write(rel1OFF, sizeof(rel1OFF));
-      delay(10);
-      //Serial.println("Turning Relay#1 Off ...");
     } else {  // if (securitySystemDisableAuthorised == true)
       Serial.println("    [DENIED]: Request blocked because securitySystemDisableAuthorised is FALSE.");
       Serial.println("27A Security UnSet Request NOT Honored - No Auth keys found");
@@ -3107,31 +2916,24 @@ bool Sec27APanicOn() {
   RotateProxyLogArray();
   // Turn on #2 Relay
   delay(10);
-  Serial.write(rel2ON, sizeof(rel2ON));
+  digitalWrite(Relay2Pin, HIGH);  // turn on relay1
   delay(10);
   //Serial.println("Turning Relay#2 On ...");
   //ProxyRequestText = "Relay 2 pulsing on - panic";
   //RotateProxyLogArray();
 
-  // Turn on #2 Relay
-  delay(10);
-  Serial.write(rel2ON, sizeof(rel2ON));
-  delay(10);
 
-  delay(1500);  // 1.5 sec pulse
+  delay(1000);  // 1.5 sec pulse
 
   // Turn off #2 Relay
-  delay(10);
-  Serial.write(rel2OFF, sizeof(rel2OFF));
+
+  digitalWrite(Relay2Pin, LOW);  // turn off relay2
   delay(10);
   //Serial.println("Turning Relay#2 Off ...");
   //ProxyRequestText = "Relay 2 pulsing off - panic";
   //RotateProxyLogArray();
   // Turn off #2 Relay
-  delay(10);
-  Serial.write(rel2OFF, sizeof(rel2OFF));
-  delay(10);
-  //Serial.println("Turning Relay#2 Off ...");
+
 
   isSec27APanicOn = false;
   return isSec27APanicOn;
@@ -3669,51 +3471,51 @@ void networkPingTaskEngine(void* parameter) {
         pBLEScan->start(3, false);
       }
 
-      } // 👈 Bracket 1: Closes -> if (WiFi.status() == WL_CONNECTED && authIPCount > 0)
+    }  // 👈 Bracket 1: Closes -> if (WiFi.status() == WL_CONNECTED && authIPCount > 0)
 
     // SAFE PLACEMENT: Delays happen out here so the task never spins at 100% CPU if WiFi fails
     int delaySeconds = networkPingIntervalSeconds;
     if (delaySeconds < 1) delaySeconds = 1;
     vTaskDelay(pdMS_TO_TICKS(delaySeconds * 1000));
 
-  } // 👈 Bracket 2: Closes -> while (true)
-} // closes void networkPingTaskEngine
+  }  // 👈 Bracket 2: Closes -> while (true)
+}  // closes void networkPingTaskEngine
 
-  void SetupWirelessOTA() {
-    // Set the network name that will show up in your Arduino IDE Ports list
-    ArduinoOTA.setHostname("SecurityGateway-C3");
+void SetupWirelessOTA() {
+  // Set the network name that will show up in your Arduino IDE Ports list
+  ArduinoOTA.setHostname("SecurityGateWay");
 
-    // Authentication Password (highly recommended for a home security gateway!)
-    ArduinoOTA.setPassword("TonySecurePass123");
+  // Authentication Password (highly recommended for a home security gateway!)
+  ArduinoOTA.setPassword("SecurityGateWay123");
 
-    // Display operational updates directly inside your serial logs
-    ArduinoOTA.onStart([]() {
-      String type = (ArduinoOTA.getCommand() == U_FLASH) ? "sketch" : "filesystem";
-      Serial.println("\n--- OTA ALERT: Wireless Update Started ---");
-      Serial.println("Updating " + type);
+  // Display operational updates directly inside your serial logs
+  ArduinoOTA.onStart([]() {
+    String type = (ArduinoOTA.getCommand() == U_FLASH) ? "sketch" : "filesystem";
+    Serial.println("\n--- OTA ALERT: Wireless Update Started ---");
+    Serial.println("Updating " + type);
 
-      // CRITICAL: Kill the Bluetooth background radio instantly to free up 100%
-      // of the antenna bandwidth for the incoming Wi-Fi upload!
-      if (pBLEScan) {
-        pBLEScan->stop();
-        Serial.println("System Handle: BLE Scanner Paused for fast Wi-Fi download.");
-      }
-    });
+    // CRITICAL: Kill the Bluetooth background radio instantly to free up 100%
+    // of the antenna bandwidth for the incoming Wi-Fi upload!
+    if (pBLEScan) {
+      pBLEScan->stop();
+      Serial.println("System Handle: BLE Scanner Paused for fast Wi-Fi download.");
+    }
+  });
 
-    ArduinoOTA.onError([](ota_error_t error) {
-      Serial.printf("OTA Error [%u]\n", error);
+  ArduinoOTA.onError([](ota_error_t error) {
+    Serial.printf("OTA Error [%u]\n", error);
 
-      // FALLBACK: If the download fails, restart the Bluetooth scanner automatically
-      if (pBLEScan) {
-        pBLEScan->start(scanSliceDuration, nullptr, false);
-      }
-    });
+    // FALLBACK: If the download fails, restart the Bluetooth scanner automatically
+    if (pBLEScan) {
+      pBLEScan->start(scanSliceDuration, nullptr, false);
+    }
+  });
 
-    // Launch the background wireless network listeners
-    ArduinoOTA.begin();
-    Serial.println("System Alert: Wireless OTA Network Listeners Active.");
-  }
-  /*
+  // Launch the background wireless network listeners
+  ArduinoOTA.begin();
+  Serial.println("System Alert: Wireless OTA Network Listeners Active.");
+}
+/*
 void handleRadioParams() {
   if (server.hasArg("rssi"))      rssiThreshold = server.arg("rssi").toInt();
   if (server.hasArg("window"))    presenceWindowSeconds = server.arg("window").toInt();
@@ -3730,39 +3532,39 @@ void handleRadioParams() {
   server.sendHeader("Location", "/");
   server.send(303, "text/plain", "Redirecting...");
 }*/
-  void handleRadioParams() {
-    // 1. HARDWARE FREEZE HOOK: Pause background scanner for safe flash writing
-    if (pBLEScan) {
-      pBLEScan->stop();
-    }
-
-    // 2. Extract values from text box inputs safely
-    if (server.hasArg("rssi")) rssiThreshold = server.arg("rssi").toInt();
-    if (server.hasArg("window")) presenceWindowSeconds = server.arg("window").toInt();
-    if (server.hasArg("scantime")) scanSliceDuration = server.arg("scantime").toInt();
-    if (server.hasArg("absence")) minAbsenceMinutes = server.arg("absence").toInt();
-
-    // 3. LOCK DOWN TO NON-VOLATILE MEMORY (Preferences)
-    prefs.putInt("rssi", rssiThreshold);
-    prefs.putInt("window", presenceWindowSeconds);
-    prefs.putInt("scantime", scanSliceDuration);
-    prefs.putInt("absence", minAbsenceMinutes);  // Saves the setting permanently!
-
-    Serial.println("Parameters secured to NVM storage registers successfully.");
-
-    // 4. HARDWARE UNFREEZE HOOK: Resume scanning with your live values
-    if (pBLEScan) {
-      pBLEScan->clearResults();
-      pBLEScan->start(scanSliceDuration, nullptr, false);
-    }
-
-    // Redirect back to dashboard root instantly
-    server.sendHeader("Location", "/");
-    server.send(303, "text/plain", "Redirecting...");
+void handleRadioParams() {
+  // 1. HARDWARE FREEZE HOOK: Pause background scanner for safe flash writing
+  if (pBLEScan) {
+    pBLEScan->stop();
   }
 
-  // --- UNIFIED NATIVE SECURITY RULE ENGINE ---
-  /*
+  // 2. Extract values from text box inputs safely
+  if (server.hasArg("rssi")) rssiThreshold = server.arg("rssi").toInt();
+  if (server.hasArg("window")) presenceWindowSeconds = server.arg("window").toInt();
+  if (server.hasArg("scantime")) scanSliceDuration = server.arg("scantime").toInt();
+  if (server.hasArg("absence")) minAbsenceMinutes = server.arg("absence").toInt();
+
+  // 3. LOCK DOWN TO NON-VOLATILE MEMORY (Preferences)
+  prefs.putInt("rssi", rssiThreshold);
+  prefs.putInt("window", presenceWindowSeconds);
+  prefs.putInt("scantime", scanSliceDuration);
+  prefs.putInt("absence", minAbsenceMinutes);  // Saves the setting permanently!
+
+  Serial.println("Parameters secured to NVM storage registers successfully.");
+
+  // 4. HARDWARE UNFREEZE HOOK: Resume scanning with your live values
+  if (pBLEScan) {
+    pBLEScan->clearResults();
+    pBLEScan->start(scanSliceDuration, nullptr, false);
+  }
+
+  // Redirect back to dashboard root instantly
+  server.sendHeader("Location", "/");
+  server.send(303, "text/plain", "Redirecting...");
+}
+
+// --- UNIFIED NATIVE SECURITY RULE ENGINE ---
+/*
 void EvaluateSecurityGateState() {
   unsigned long currentMillis = millis();
 
@@ -3861,7 +3663,7 @@ void EvaluateSecurityGateState() {
   }
 }
 */
-  /* 
+/* 
 
 works but token names dont concatemate
 
@@ -3967,7 +3769,7 @@ void EvaluateSecurityGateState() {
 }
 */
 
-  /* 
+/* 
 this incorrectly sets the securitysystemdiable flag 
 void EvaluateSecurityGateState() {
   unsigned long currentMillis = millis();
@@ -4107,85 +3909,85 @@ void EvaluateSecurityGateState() {
 
 */
 
-  void EvaluateSecurityGateState() {
-    unsigned long currentMillis = millis();
+void EvaluateSecurityGateState() {
+  unsigned long currentMillis = millis();
 
-    // ==========================================
-    // RULE 1: CRITICAL FORCE DISABLE OVERRIDE
-    // ==========================================
-    if (currentGateState == GATE_DISABLED) {
-      securitySystemDisableAuthorised = false;
-      authorisingDeviceNames = "SYSTEM FORCE DISABLED";
-      return;
-    }
+  // ==========================================
+  // RULE 1: CRITICAL FORCE DISABLE OVERRIDE
+  // ==========================================
+  if (currentGateState == GATE_DISABLED) {
+    securitySystemDisableAuthorised = false;
+    authorisingDeviceNames = "SYSTEM FORCE DISABLED";
+    return;
+  }
 
-    // ==========================================
-    // RULE 2: CRITICAL FORCE BYPASS OVERRIDE
-    // ==========================================
-    if (currentGateState == GATE_BYPASS) {
-      securitySystemDisableAuthorised = true;
-      authorisingDeviceNames = "SYSTEM FORCE BYPASSED";
-      return;
-    }
+  // ==========================================
+  // RULE 2: CRITICAL FORCE BYPASS OVERRIDE
+  // ==========================================
+  if (currentGateState == GATE_BYPASS) {
+    securitySystemDisableAuthorised = true;
+    authorisingDeviceNames = "SYSTEM FORCE BYPASSED";
+    return;
+  }
 
-    // ==========================================
-    // RULE 3: EVALUATE TIMING VALIDATION WINDOWS
-    // ==========================================
-    unsigned long timeElapsedSec = (currentMillis - gateActivationTime) / 1000;
-    bool isArrivalWindowActive = (timeElapsedSec < (unsigned long)voiceGateOpenDurationSeconds);
+  // ==========================================
+  // RULE 3: EVALUATE TIMING VALIDATION WINDOWS
+  // ==========================================
+  unsigned long timeElapsedSec = (currentMillis - gateActivationTime) / 1000;
+  bool isArrivalWindowActive = (timeElapsedSec < (unsigned long)voiceGateOpenDurationSeconds);
 
-    if (isArrivalWindowActive) {
-      // A fresh arrival spike or phone ping has recently triggered the window!
-      String dynamicNameBuilder = "";
+  if (isArrivalWindowActive) {
+    // A fresh arrival spike or phone ping has recently triggered the window!
+    String dynamicNameBuilder = "";
 
-      // Check if a Bluetooth tracker is home and active within your keep-alive window
-      for (int i = 0; i < deviceCount; i++) {
-        if ((currentMillis - discoveredDevices[i].lastSeen) < ((unsigned long)presenceWindowSeconds * 1000)) {
-          for (int k = 0; k < authDeviceCount; k++) {
-            if (authDevices[k].macAddress == discoveredDevices[i].macAddress) {
-              if (dynamicNameBuilder != "") {
-                if (dynamicNameBuilder.indexOf(authDevices[k].friendlyName) == -1) {
-                  dynamicNameBuilder += " & " + authDevices[k].friendlyName;
-                }
-              } else {
-                dynamicNameBuilder = authDevices[k].friendlyName;
+    // Check if a Bluetooth tracker is home and active within your keep-alive window
+    for (int i = 0; i < deviceCount; i++) {
+      if ((currentMillis - discoveredDevices[i].lastSeen) < ((unsigned long)presenceWindowSeconds * 1000)) {
+        for (int k = 0; k < authDeviceCount; k++) {
+          if (authDevices[k].macAddress == discoveredDevices[i].macAddress) {
+            if (dynamicNameBuilder != "") {
+              if (dynamicNameBuilder.indexOf(authDevices[k].friendlyName) == -1) {
+                dynamicNameBuilder += " & " + authDevices[k].friendlyName;
               }
+            } else {
+              dynamicNameBuilder = authDevices[k].friendlyName;
             }
           }
         }
       }
-
-      // Append active cellphone string if present
-      if (wifiSmartphoneFriendlyName != "") {
-        if (dynamicNameBuilder != "") {
-          if (dynamicNameBuilder.indexOf(wifiSmartphoneFriendlyName) == -1) {
-            dynamicNameBuilder += " & " + wifiSmartphoneFriendlyName;
-          }
-        } else {
-          dynamicNameBuilder = wifiSmartphoneFriendlyName;
-        }
-      }
-
-      // FIXED: If an authorized token or phone is active AND the arrival clock is ticking,
-      // we are officially permitted to flip the high-level security flags to TRUE!
-      if (dynamicNameBuilder != "") {
-        securitySystemDisableAuthorised = true;
-        authorisingDeviceNames = dynamicNameBuilder;
-        currentGateState = GATE_AUTO_OPEN;  // Sync state tracking Enum ID to 1
-      } else {
-        // No tokens are physically active inside the yard anymore, clear the string safely
-        authorisingDeviceNames = "Scanning...";
-      }
-
-    } else {
-      // 🔒 LOCKDOWN SINK: The countdown has run out! Securely drop the flags.
-      // Because it falls out of the timer window, it stays stably shut and can never
-      // force itself back open until a new arrival spike resets the countdown clock!
-      securitySystemDisableAuthorised = false;
-      authorisingDeviceNames = "Scanning...";
-      currentGateState = GATE_AUTO_CLOSED;  // Sync state tracking Enum ID to 0
     }
-    /*
+
+    // Append active cellphone string if present
+    if (wifiSmartphoneFriendlyName != "") {
+      if (dynamicNameBuilder != "") {
+        if (dynamicNameBuilder.indexOf(wifiSmartphoneFriendlyName) == -1) {
+          dynamicNameBuilder += " & " + wifiSmartphoneFriendlyName;
+        }
+      } else {
+        dynamicNameBuilder = wifiSmartphoneFriendlyName;
+      }
+    }
+
+    // FIXED: If an authorized token or phone is active AND the arrival clock is ticking,
+    // we are officially permitted to flip the high-level security flags to TRUE!
+    if (dynamicNameBuilder != "") {
+      securitySystemDisableAuthorised = true;
+      authorisingDeviceNames = dynamicNameBuilder;
+      currentGateState = GATE_AUTO_OPEN;  // Sync state tracking Enum ID to 1
+    } else {
+      // No tokens are physically active inside the yard anymore, clear the string safely
+      authorisingDeviceNames = "Scanning...";
+    }
+
+  } else {
+    // 🔒 LOCKDOWN SINK: The countdown has run out! Securely drop the flags.
+    // Because it falls out of the timer window, it stays stably shut and can never
+    // force itself back open until a new arrival spike resets the countdown clock!
+    securitySystemDisableAuthorised = false;
+    authorisingDeviceNames = "Scanning...";
+    currentGateState = GATE_AUTO_CLOSED;  // Sync state tracking Enum ID to 0
+  }
+  /*
   // =========================================================================
   // 🔍 PRODUCTION GATE DIAGNOSTIC PRINTER 
   // =========================================================================
@@ -4206,4 +4008,4 @@ void EvaluateSecurityGateState() {
   }
 
   */
-  }
+}
